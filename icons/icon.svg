@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ChaloYaar">
+  <rect width="512" height="512" fill="#1F3D2B"/>
+  <rect x="36" y="36" width="440" height="440" fill="none" stroke="#FAF6EF" stroke-width="16"/>
+  <text x="48" y="300" font-family="Georgia, 'Times New Roman', serif" font-size="140" font-weight="700" fill="#FAF6EF">CY</text>
+  <rect x="360" y="88" width="64" height="64" fill="#E85D26"/>
+</svg>
