@@ -190,7 +190,7 @@
   }
 
   // Public site for WhatsApp / share (localhost links aren't clickable for friends)
-  const PUBLIC_SHARE_ORIGIN = "https://mriganshu16.github.io/chaloyaar";
+  const PUBLIC_SHARE_ORIGIN = "https://chaloyaar.nofilterhq.in";
 
   function shareOrigin() {
     try {
