@@ -25,6 +25,8 @@
     geminiWinner: "cr_gemini_winner",
     weather: "cr_weather_cache",
     photos: "cr_photo_cache",
+    lang: "cr_lang",
+    langCache: "cr_lang_cache",
   };
 
   const BUDGETS = [
@@ -313,6 +315,9 @@
     routeAskAnswer: "",
     keyTest: "",
     detecting: false,
+    lang: lsGet(LS.lang, "en") === "hi" ? "hi" : "en",
+    langBusy: false,
+    langError: "",
   };
 
   /* ---------- place photos (Wikipedia / Commons, free, no key) ---------- */
@@ -1176,6 +1181,272 @@
       <ul class="list-block">${tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`;
   }
 
+  const LANG_UI = {
+    en: {
+      why: "why this slaps",
+      when: "when to go",
+      weather: "weather at",
+      stops: "the pit stops",
+      facts: "no-cap facts",
+      flags: "red flags (respect them)",
+      transit: "getting there by bus/train",
+      ride: "if you ride",
+      drive: "if you drive",
+      bus: "if you bus it",
+      rider: "rider notes",
+      driver: "driver notes",
+      transitNotes: "transit notes",
+      askTitle: "Ask AI about this route",
+      askHint: "needs your key in settings. answers stay grounded in this trip’s details.",
+      askPh: "e.g. is this chill for a pillion beginner?",
+      askBtn: "ask",
+      thinking: "thinking…",
+      translating: "Writing Hinglish…",
+      needKey: "Hinglish is temporarily unavailable — try again in a bit",
+      cached: "Hinglish · saved on this phone",
+      en: "English",
+      hi: "Hinglish",
+    },
+    hi: {
+      why: "yeh trip kyun maarta hai",
+      when: "kab jaana hai",
+      weather: "yahan ka mausam",
+      stops: "pit stops",
+      facts: "seedha facts",
+      flags: "red flags (ignore mat karna)",
+      transit: "bus/train se kaise pahunche",
+      ride: "agar bike pe ho",
+      drive: "agar car pe ho",
+      bus: "agar bus/train pe ho",
+      rider: "rider notes",
+      driver: "driver notes",
+      transitNotes: "transit notes",
+      askTitle: "is trip pe AI se poochho",
+      askHint: "settings mein key chahiye. jawab isi trip pe based rahega.",
+      askPh: "jaise: pillion beginner ke liye chill hai kya?",
+      askBtn: "poochho",
+      thinking: "soch raha hai…",
+      translating: "Hinglish ban raha hai…",
+      needKey: "Hinglish abhi available nahi — thodi der baad try karo",
+      cached: "Hinglish · is phone pe save",
+      en: "English",
+      hi: "Hinglish",
+    },
+  };
+
+  function uiCopy() {
+    return LANG_UI[state.lang === "hi" ? "hi" : "en"];
+  }
+
+  function langCacheKey(routeId, lang) {
+    return `${routeId}:${lang}`;
+  }
+
+  function getLangCache(routeId, lang) {
+    const all = lsJSON(LS.langCache, {});
+    const hit = all[langCacheKey(routeId, lang)];
+    if (!hit || !hit.data) return null;
+    // keep 30 days
+    if (Date.now() - (hit.ts || 0) > 30 * 24 * 60 * 60 * 1000) return null;
+    return hit.data;
+  }
+
+  function setLangCache(routeId, lang, data) {
+    const all = lsJSON(LS.langCache, {});
+    all[langCacheKey(routeId, lang)] = { ts: Date.now(), data };
+    const keys = Object.keys(all);
+    if (keys.length > 60) {
+      keys
+        .sort((a, b) => (all[a].ts || 0) - (all[b].ts || 0))
+        .slice(0, keys.length - 60)
+        .forEach((k) => delete all[k]);
+    }
+    lsSetJSON(LS.langCache, all);
+  }
+
+  function routePayloadForLang(route) {
+    return {
+      tagline: route.tagline || "",
+      why: route.why || "",
+      best_time: route.best_time || "",
+      facts: route.facts || [],
+      flags: route.flags || [],
+      transit: route.transit || "",
+      season: route.season || { best: "", avoid: "" },
+      stops: (route.stops || []).map((s) => ({
+        name: s.name || "",
+        note: s.note || "",
+        km: s.km,
+      })),
+      mode_tips: {
+        bike: (route.mode_tips && route.mode_tips.bike) || [],
+        car: (route.mode_tips && route.mode_tips.car) || [],
+        public: (route.mode_tips && route.mode_tips.public) || [],
+      },
+    };
+  }
+
+  function mergeLangOverlay(route, overlay) {
+    if (!overlay) return route;
+    const stops = Array.isArray(overlay.stops)
+      ? (route.stops || []).map((s, i) => {
+          const o = overlay.stops[i] || {};
+          return Object.assign({}, s, {
+            note: o.note != null ? o.note : s.note,
+          });
+        })
+      : route.stops;
+    return Object.assign({}, route, {
+      tagline: overlay.tagline || route.tagline,
+      why: overlay.why || route.why,
+      best_time: overlay.best_time || route.best_time,
+      facts: Array.isArray(overlay.facts) && overlay.facts.length ? overlay.facts : route.facts,
+      flags: Array.isArray(overlay.flags) && overlay.flags.length ? overlay.flags : route.flags,
+      transit: overlay.transit || route.transit,
+      season: overlay.season
+        ? {
+            best: overlay.season.best || (route.season && route.season.best) || "",
+            avoid: overlay.season.avoid || (route.season && route.season.avoid) || "",
+          }
+        : route.season,
+      stops,
+      mode_tips: {
+        bike:
+          (overlay.mode_tips && overlay.mode_tips.bike) ||
+          (route.mode_tips && route.mode_tips.bike) ||
+          [],
+        car:
+          (overlay.mode_tips && overlay.mode_tips.car) ||
+          (route.mode_tips && route.mode_tips.car) ||
+          [],
+        public:
+          (overlay.mode_tips && overlay.mode_tips.public) ||
+          (route.mode_tips && route.mode_tips.public) ||
+          [],
+      },
+    });
+  }
+
+  function routeForDisplay(route) {
+    if (!route || state.lang !== "hi") return route;
+    return mergeLangOverlay(route, getLangCache(route.id, "hi"));
+  }
+
+  function parseLangJson(text) {
+    const raw = stripFences(text);
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error("couldn't parse Hinglish JSON — try again?");
+    }
+    if (Array.isArray(data)) data = data[0];
+    if (!data || typeof data !== "object") throw new Error("empty Hinglish response");
+    return data;
+  }
+
+  async function callHostedGemini(prompt, purpose) {
+    const urls = ["/api/gemini", "/.netlify/functions/gemini"];
+    let lastErr = null;
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt, purpose: purpose || "hinglish" }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          lastErr = new Error("hosted AI not available on this server");
+          continue;
+        }
+        if (!res.ok) throw new Error((j && j.error) || res.statusText || "hosted AI failed");
+        if (!j || !j.text) throw new Error("empty hosted AI response");
+        return j.text;
+      } catch (e) {
+        lastErr = e;
+        if (/hosted AI not available/i.test((e && e.message) || "")) continue;
+        throw e;
+      }
+    }
+    throw lastErr || new Error("hosted AI unavailable");
+  }
+
+  async function generateHinglishText(prompt) {
+    try {
+      return await callHostedGemini(prompt, "hinglish");
+    } catch (hostedErr) {
+      // Local `serve` / missing Netlify function: fall back to BYOK if present
+      if (getKey(getProvider())) {
+        return callAI(prompt);
+      }
+      const msg = (hostedErr && hostedErr.message) || "";
+      if (/not available|Failed to fetch|NetworkError|404/i.test(msg)) {
+        throw new Error(
+          "Hinglish runs on the live site (chaloyaar.nofilterhq.in). Add GEMINI_API_KEY in Netlify, or paste a key in Settings for local testing."
+        );
+      }
+      throw hostedErr;
+    }
+  }
+
+  async function fetchHinglish(route) {
+    const payload = routePayloadForLang(route);
+    const prompt =
+      `Rewrite this ChaloYaar trip copy into casual Hinglish for young Indian travellers.\n` +
+      `Rules:\n` +
+      `- Roman script only (not Devanagari). Mix Hindi + English like real WhatsApp chat: "subah 4 baje nikalna padega", "traffic wala scene".\n` +
+      `- Keep place names, road names, ₹ amounts, km, and times accurate — do not invent new facts.\n` +
+      `- Keep the same vibe: honest, street, no corporate tone.\n` +
+      `- Return ONLY a JSON object (no markdown) with keys: tagline, why, best_time, facts (string[]), flags (string[]), transit (string), season {best, avoid}, stops ([{name, note}]), mode_tips {bike:string[], car:string[], public:string[]}.\n` +
+      `- stops.name: keep proper place names; translate notes.\n\n` +
+      `Source:\n${JSON.stringify(payload)}`;
+    const text = await generateHinglishText(prompt);
+    return parseLangJson(text);
+  }
+
+  async function setTripLang(lang) {
+    const next = lang === "hi" ? "hi" : "en";
+    state.langError = "";
+    if (next === "en") {
+      state.lang = "en";
+      lsSet(LS.lang, "en");
+      render();
+      return;
+    }
+    const route = routeById(state.routeId);
+    if (!route) return;
+    state.lang = "hi";
+    lsSet(LS.lang, "hi");
+    if (getLangCache(route.id, "hi")) {
+      render();
+      return;
+    }
+    state.langBusy = true;
+    render();
+    try {
+      const data = await fetchHinglish(route);
+      setLangCache(route.id, "hi", data);
+      toast("Hinglish ready");
+    } catch (e) {
+      state.lang = "en";
+      lsSet(LS.lang, "en");
+      state.langError = friendlyAiError(e, "gemini");
+      toast(state.langError || "Hinglish failed");
+    }
+    state.langBusy = false;
+    render();
+  }
+
+  function langSwitchHtml() {
+    const ui = uiCopy();
+    const enOn = state.lang !== "hi";
+    return `<div class="lang-switch" role="group" aria-label="Language">
+      <button type="button" class="lang-btn ${enOn ? "on" : ""}" data-lang="en" ${state.langBusy ? "disabled" : ""}>${esc(ui.en)}</button>
+      <button type="button" class="lang-btn ${!enOn ? "on" : ""}" data-lang="hi" ${state.langBusy ? "disabled" : ""}>${esc(ui.hi)}</button>
+    </div>`;
+  }
+
   function viewHome() {
     const firstRun = !state.modeAsked;
     return `
@@ -1271,20 +1542,23 @@
   }
 
   function viewRoute() {
-    const route = routeById(state.routeId);
-    if (!route) {
+    const base = routeById(state.routeId);
+    if (!base) {
       return `<p>trip went missing.</p><button type="button" class="btn" id="btn-back-results">back</button>`;
     }
+    const route = routeForDisplay(base);
+    const ui = uiCopy();
     const m = modeMeta(state.mode);
     const mapsLabel = state.mode === "public" ? "transit directions" : "open in maps";
-    const saved = isSaved(route.id);
+    const saved = isSaved(base.id);
+    const hinglishCached = !!getLangCache(base.id, "hi");
 
-    const why = `<h3 class="section-h">why this slaps</h3><p>${esc(route.why)}</p>`;
-    const when = `<h3 class="section-h tight">when to go</h3>
+    const why = `<h3 class="section-h">${esc(ui.why)}</h3><p>${esc(route.why)}</p>`;
+    const when = `<h3 class="section-h tight">${esc(ui.when)}</h3>
       <p>${esc(route.best_time)}</p>
       <p class="fine">best: ${esc((route.season && route.season.best) || "—")} · avoid: ${esc((route.season && route.season.avoid) || "—")}</p>`;
 
-    let weatherHtml = `<h3 class="section-h tight">weather at ${esc(route.dest)}</h3>`;
+    let weatherHtml = `<h3 class="section-h tight">${esc(ui.weather)} ${esc(route.dest)}</h3>`;
     if (state.weatherLoading) weatherHtml += `<p class="muted">checking the sky…</p>`;
     else if (state.weather && state.weather.offline) {
       weatherHtml += `<p class="muted">offline — weather unreachable right now</p>`;
@@ -1296,22 +1570,22 @@
       </div>`;
     } else weatherHtml += `<p class="muted">weather loading…</p>`;
 
-    const stops = `<h3 class="section-h">the pit stops</h3>
+    const stops = `<h3 class="section-h">${esc(ui.stops)}</h3>
       <ul class="list-block">${(route.stops || []).map((s) => `<li><strong>${esc(s.name)}</strong>${s.km != null ? ` <span class="mono">(${esc(s.km)} km)</span>` : ""} — ${esc(s.note || "")}</li>`).join("") || "<li>wing it, carefully</li>"}</ul>`;
-    const facts = `<h3 class="section-h">no-cap facts</h3>
+    const facts = `<h3 class="section-h">${esc(ui.facts)}</h3>
       <ul class="list-block">${(route.facts || []).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`;
-    const flags = `<h3 class="section-h">red flags (respect them)</h3>
+    const flags = `<h3 class="section-h">${esc(ui.flags)}</h3>
       <ul class="list-block">${(route.flags || []).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`;
-    const transit = `<h3 class="section-h">getting there by bus/train</h3>
+    const transit = `<h3 class="section-h">${esc(ui.transit)}</h3>
       <p>${esc(route.transit || "")}</p>
-      <p style="margin-top:10px"><a class="btn sm green" href="${esc(transitMapsLink(route))}" target="_blank" rel="noopener">open transit directions</a></p>`;
-    const transitNotes = tipsBlock("transit notes", route.mode_tips && route.mode_tips.public);
+      <p style="margin-top:10px"><a class="btn sm green" href="${esc(transitMapsLink(base))}" target="_blank" rel="noopener">open transit directions</a></p>`;
+    const transitNotes = tipsBlock(ui.transitNotes, route.mode_tips && route.mode_tips.public);
 
-    const bikeTips = tipsBlock("if you ride", route.mode_tips && route.mode_tips.bike);
-    const carTips = tipsBlock("if you drive", route.mode_tips && route.mode_tips.car);
-    const pubTips = tipsBlock("if you bus it", route.mode_tips && route.mode_tips.public);
-    const riderNotes = tipsBlock("rider notes", route.mode_tips && route.mode_tips.bike);
-    const driverNotes = tipsBlock("driver notes", route.mode_tips && route.mode_tips.car);
+    const bikeTips = tipsBlock(ui.ride, route.mode_tips && route.mode_tips.bike);
+    const carTips = tipsBlock(ui.drive, route.mode_tips && route.mode_tips.car);
+    const pubTips = tipsBlock(ui.bus, route.mode_tips && route.mode_tips.public);
+    const riderNotes = tipsBlock(ui.rider, route.mode_tips && route.mode_tips.bike);
+    const driverNotes = tipsBlock(ui.driver, route.mode_tips && route.mode_tips.car);
 
     let body = "";
     if (state.mode === "public") {
@@ -1324,8 +1598,8 @@
       body = stops + bikeTips + carTips + pubTips + facts + flags + transit;
     }
 
-    const photoQ = photoQuery(route);
-    const galQs = galleryQueries(route).join("|");
+    const photoQ = photoQuery(base);
+    const galQs = galleryQueries(base).join("|");
     const photoBlock = `<div class="place-media" data-gallery-root data-gallery-q="${esc(galQs)}">
         <div class="hero-wrap">
           <img class="hero-photo" data-photo-q="${esc(photoQ)}" alt="" width="800" height="200" />
@@ -1343,9 +1617,13 @@
 
     return `
       <div class="block">
-        <div class="topbar">
+        <div class="topbar topbar-lang">
           <button type="button" class="btn sm secondary" id="btn-back-results">back</button>
+          ${langSwitchHtml()}
         </div>
+        ${state.langBusy ? `<div class="banner ok" style="margin-bottom:10px">${esc(ui.translating)}</div>` : ""}
+        ${state.langError ? `<div class="banner warn" style="margin-bottom:10px">${esc(state.langError)}</div>` : ""}
+        ${state.lang === "hi" && hinglishCached && !state.langBusy ? `<p class="fine" style="margin:0 0 8px">${esc(ui.cached)}</p>` : ""}
         ${photoBlock}
         <div class="card offset accent-edge">
           <span class="pill green">${esc(m.label)}</span>
@@ -1359,7 +1637,7 @@
             <span class="stat">${esc(route.cost)}</span>
           </div>
           <div class="action-grid">
-            <a class="btn sm green" id="btn-maps" href="${esc(mapsLink(route, state.mode))}" target="_blank" rel="noopener">${mapsLabel}</a>
+            <a class="btn sm green" id="btn-maps" href="${esc(mapsLink(base, state.mode))}" target="_blank" rel="noopener">${mapsLabel}</a>
             <button type="button" class="btn sm ${saved ? "ink" : "secondary"}" id="btn-save">${saved ? "saved" : "save"}</button>
             <button type="button" class="btn sm secondary" id="btn-share">share</button>
             <button type="button" class="btn sm" id="btn-wa">WhatsApp</button>
@@ -1375,10 +1653,10 @@
       </div>
       <div class="block">
         <div class="card green-fill">
-          <strong style="font-size:1.2rem;font-weight:700;letter-spacing:-0.02em;line-height:1.2">Ask AI about this route</strong>
-          <p class="fine" style="margin:6px 0 8px">needs your key in settings. answers stay grounded in this trip’s details.</p>
-          <textarea class="field" id="route-ask" placeholder="e.g. is this chill for a pillion beginner?" style="background:var(--paper);color:var(--ink)">${esc(state.routeAsk)}</textarea>
-          <button type="button" class="btn" id="btn-route-ask" style="margin-top:8px">${state.routeAskBusy ? "thinking…" : "ask"}</button>
+          <strong style="font-size:1.2rem;font-weight:700;letter-spacing:-0.02em;line-height:1.2">${esc(ui.askTitle)}</strong>
+          <p class="fine" style="margin:6px 0 8px">${esc(ui.askHint)}</p>
+          <textarea class="field" id="route-ask" placeholder="${esc(ui.askPh)}" style="background:var(--paper);color:var(--ink)">${esc(state.routeAsk)}</textarea>
+          <button type="button" class="btn" id="btn-route-ask" style="margin-top:8px">${state.routeAskBusy ? esc(ui.thinking) : esc(ui.askBtn)}</button>
           ${state.routeAskAnswer ? `<div class="card panel" style="margin-top:10px;color:var(--ink)">${esc(state.routeAskAnswer)}</div>` : ""}
         </div>
       </div>
@@ -1628,6 +1906,9 @@
           askAboutRoute(route, state.routeAsk);
         });
       }
+      document.querySelectorAll("[data-lang]").forEach((el) => {
+        el.addEventListener("click", () => setTripLang(el.getAttribute("data-lang")));
+      });
     },
     ai() {
       const ta = document.getElementById("ai-prompt");
@@ -1829,6 +2110,9 @@
     shareText,
     searchMoreTrips,
     editFeelings,
+    routeForDisplay,
+    setTripLang,
+    parseLangJson,
     parseRoutes,
     fillRouteDefaults,
     stripFences,

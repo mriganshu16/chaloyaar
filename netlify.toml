@@ -1,0 +1,19 @@
+# ChaloYaar — Netlify static + functions
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Pretty API path for the Gemini proxy
+[[redirects]]
+  from = "/api/gemini"
+  to = "/.netlify/functions/gemini"
+  status = 200
+  force = true
+
+# SPA-ish: keep query deep links working
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
