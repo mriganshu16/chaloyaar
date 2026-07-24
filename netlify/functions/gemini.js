@@ -52,16 +52,23 @@ async function listModels(key) {
   return models;
 }
 
-async function generate(key, model, prompt) {
+async function generate(key, model, prompt, purpose) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(key)}`;
+  const generationConfig = {
+    temperature: purpose === "hinglish" ? 0.35 : 0.8,
+  };
+  // Ask Gemini for strict JSON when rewriting Hinglish overlays
+  if (purpose === "hinglish") {
+    generationConfig.responseMimeType = "application/json";
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.8 },
+      generationConfig,
     }),
   });
   const j = await res.json();
@@ -124,7 +131,7 @@ exports.handler = async (event) => {
     let lastErr = null;
     for (const model of models.slice(0, 8)) {
       try {
-        const text = await generate(key, model, prompt);
+        const text = await generate(key, model, prompt, purpose);
         return cors(200, { text, model });
       } catch (e) {
         const msg = (e && e.message) || String(e);

@@ -849,6 +849,69 @@
     return t;
   }
 
+  /** Extract a JSON object/array from messy model output (markdown, chatter, etc.) */
+  function extractJsonBlob(text, preferObject) {
+    let t = String(text || "").trim();
+    if (!t) throw new Error("empty AI response");
+    t = t.replace(/^\uFEFF/, "");
+    t = t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    // Some models wrap with explanatory lines — take fenced block if present mid-string
+    const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence) t = fence[1].trim();
+
+    const tryParse = (s) => {
+      try {
+        return JSON.parse(s);
+      } catch (_) {
+        return null;
+      }
+    };
+
+    let parsed = tryParse(t);
+    if (parsed != null) return parsed;
+
+    // Prefer {...} for Hinglish overlays (stripFences' [..] would steal inner arrays)
+    if (preferObject) {
+      const oStart = t.indexOf("{");
+      const oEnd = t.lastIndexOf("}");
+      if (oStart >= 0 && oEnd > oStart) {
+        parsed = tryParse(t.slice(oStart, oEnd + 1));
+        if (parsed != null) return parsed;
+      }
+    }
+
+    const aStart = t.indexOf("[");
+    const aEnd = t.lastIndexOf("]");
+    if (aStart >= 0 && aEnd > aStart) {
+      parsed = tryParse(t.slice(aStart, aEnd + 1));
+      if (parsed != null) return parsed;
+    }
+
+    if (!preferObject) {
+      const oStart = t.indexOf("{");
+      const oEnd = t.lastIndexOf("}");
+      if (oStart >= 0 && oEnd > oStart) {
+        parsed = tryParse(t.slice(oStart, oEnd + 1));
+        if (parsed != null) return parsed;
+      }
+    }
+
+    // Light cleanup: smart quotes / trailing commas
+    let cleaned = t
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/,\s*([}\]])/g, "$1");
+    if (preferObject) {
+      const oStart = cleaned.indexOf("{");
+      const oEnd = cleaned.lastIndexOf("}");
+      if (oStart >= 0 && oEnd > oStart) cleaned = cleaned.slice(oStart, oEnd + 1);
+    }
+    parsed = tryParse(cleaned);
+    if (parsed != null) return parsed;
+
+    throw new Error("couldn't parse Hinglish JSON — try again?");
+  }
+
   function fillRouteDefaults(r, i) {
     const idBase = (r.id || r.name || `ai-trip-${Date.now()}-${i}`)
       .toString()
@@ -1333,13 +1396,7 @@
   }
 
   function parseLangJson(text) {
-    const raw = stripFences(text);
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (_) {
-      throw new Error("couldn't parse Hinglish JSON — try again?");
-    }
+    let data = extractJsonBlob(text, true);
     if (Array.isArray(data)) data = data[0];
     if (!data || typeof data !== "object") throw new Error("empty Hinglish response");
     return data;
@@ -1398,8 +1455,10 @@
       `- Roman script only (not Devanagari). Mix Hindi + English like real WhatsApp chat: "subah 4 baje nikalna padega", "traffic wala scene".\n` +
       `- Keep place names, road names, ₹ amounts, km, and times accurate — do not invent new facts.\n` +
       `- Keep the same vibe: honest, street, no corporate tone.\n` +
-      `- Return ONLY a JSON object (no markdown) with keys: tagline, why, best_time, facts (string[]), flags (string[]), transit (string), season {best, avoid}, stops ([{name, note}]), mode_tips {bike:string[], car:string[], public:string[]}.\n` +
-      `- stops.name: keep proper place names; translate notes.\n\n` +
+      `- Output MUST be a single JSON object. No markdown fences. No intro/outro text.\n` +
+      `- Keys required: tagline (string), why (string), best_time (string), facts (string[]), flags (string[]), transit (string), season (object with best+avoid strings), stops (array of {name, note}), mode_tips (object with bike/car/public string arrays).\n` +
+      `- stops.name: keep proper place names; translate notes.\n` +
+      `- Escape quotes inside strings properly for valid JSON.\n\n` +
       `Source:\n${JSON.stringify(payload)}`;
     const text = await generateHinglishText(prompt);
     return parseLangJson(text);
@@ -2113,6 +2172,7 @@
     routeForDisplay,
     setTripLang,
     parseLangJson,
+    extractJsonBlob,
     parseRoutes,
     fillRouteDefaults,
     stripFences,

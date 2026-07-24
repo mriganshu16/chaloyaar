@@ -194,6 +194,14 @@ async function main() {
   }
   CY.boot();
 
+  section("extractJsonBlob Hinglish chatter");
+  assert(typeof CY.extractJsonBlob === "function", "extractJsonBlob exported");
+  if (typeof CY.extractJsonBlob === "function") {
+    const blob = CY.extractJsonBlob('```json\n{"tagline":"x","facts":["a"]}\n```', true);
+    assert(blob && blob.tagline === "x", "extractJsonBlob pulls object from fenced JSON");
+    assert(Array.isArray(blob.facts) && blob.facts[0] === "a", "extractJsonBlob keeps facts array");
+  }
+
   // Force 380px phone viewport feel
   Object.defineProperty(window, "innerWidth", { value: 380, configurable: true });
 
