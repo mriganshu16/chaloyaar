@@ -157,52 +157,81 @@
     const m = modeMeta(modeId);
     const travelmode = m.maps === "transit" ? "transit" : "driving";
     const origin = encodeURIComponent(state.loc || route.origin || "Bengaluru");
-    const dest = route.destq || encodeURIComponent(route.dest || "");
+    const destRaw = (route.dest || route.name || "").trim();
+    let dest;
+    if (destRaw) {
+      dest = encodeURIComponent(destRaw);
+    } else if (route.destq) {
+      // destq is usually already encoded — normalize once
+      try {
+        dest = encodeURIComponent(decodeURIComponent(route.destq));
+      } catch (_) {
+        dest = route.destq;
+      }
+    } else {
+      dest = encodeURIComponent("Bengaluru");
+    }
     let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${travelmode}`;
     if (route.waypoints && route.waypoints.length) {
-      url += `&waypoints=${route.waypoints.map(encodeURIComponent).join("|")}`;
+      // use %7C not bare | — bare pipes break WhatsApp / chat link detection
+      url += `&waypoints=${route.waypoints.map(encodeURIComponent).join("%7C")}`;
     }
     return url;
   }
 
   function transitMapsLink(route) {
-    const origin = encodeURIComponent(state.loc || route.origin || "Bengaluru");
-    const dest = route.destq || encodeURIComponent(route.dest || "");
-    return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=transit`;
+    return mapsLink(route, "public");
+  }
+
+  function mapsShareLink(route) {
+    // Destination-only search URL — most reliable inside WhatsApp
+    const raw = (route.dest || route.name || "Bengaluru").trim();
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(raw)}`;
+  }
+
+  // Public site for WhatsApp / share (localhost links aren't clickable for friends)
+  const PUBLIC_SHARE_ORIGIN = "https://mriganshu16.github.io/chaloyaar";
+
+  function shareOrigin() {
+    try {
+      const host = (location && location.hostname) || "";
+      if (!host || host === "localhost" || host === "127.0.0.1") {
+        return PUBLIC_SHARE_ORIGIN;
+      }
+      const base = location.href.split("#")[0].split("?")[0];
+      return base.replace(/\/index\.html$/i, "").replace(/\/$/, "") || PUBLIC_SHARE_ORIGIN;
+    } catch (_) {
+      return PUBLIC_SHARE_ORIGIN;
+    }
+  }
+
+  function tripDeepLink(route) {
+    if (!route || !route.id) return shareOrigin() + "/";
+    // query param (not hash) — WhatsApp linkifies these reliably
+    return `${shareOrigin()}/?trip=${encodeURIComponent(route.id)}`;
   }
 
   function shareText(route, modeId) {
     const m = modeMeta(modeId);
-    const stops = (route.stops || [])
-      .slice(0, 5)
-      .map((s) => `• ${s.name}${s.note ? ` — ${s.note}` : ""}`)
-      .join("\n");
-    const flags = (route.flags || []).slice(0, 3).map((f) => `• ${f}`).join("\n");
-    const appUrl =
-      typeof location !== "undefined" ? location.href.split("#")[0] : "https://chaloyaar.app";
-    const why = (route.why || "").trim();
-    const whyShort = why.length > 220 ? why.slice(0, 217).trim() + "…" : why;
+    const planUrl = tripDeepLink(route);
+    const mapsUrl = mapsShareLink(route);
+    const approxTime = route.ride_time || "check the plan for timing";
 
+    // Keep bare https URLs on their own lines so WhatsApp makes them tappable
     return (
-      `*ChaloYaar trip card*\n` +
-      `────────────────────\n\n` +
       `*${route.name}*\n` +
-      (route.tagline ? `_${route.tagline}_\n\n` : `\n`) +
-      `*At a glance*\n` +
-      `• Mode: ${m.label}\n` +
-      `• Time: ${route.ride_time}\n` +
-      `• Distance: ${route.distance_km} km\n` +
-      `• Cost: ${route.cost}\n` +
-      (route.best_time ? `• When: ${route.best_time}\n` : "") +
+      `_${m.label}_\n` +
+      (route.tagline ? `${route.tagline}\n` : "") +
       `\n` +
-      (whyShort ? `*Why this slaps*\n${whyShort}\n\n` : "") +
-      (stops ? `*Pit stops*\n${stops}\n\n` : "") +
-      (flags ? `*Respect these*\n${flags}\n\n` : "") +
-      `*Maps*\n${mapsLink(route, modeId)}\n\n` +
-      `────────────────────\n` +
-      `Planned on *ChaloYaar*\n` +
-      `Free · No login · Time-budget first\n` +
-      `${appUrl}`
+      `Approx time: ${approxTime}\n` +
+      (route.distance_km != null ? `Distance: ~${route.distance_km} km\n` : "") +
+      (route.best_time ? `When: ${route.best_time}\n` : "") +
+      `\n` +
+      `Maps\n` +
+      `${mapsUrl}\n` +
+      `\n` +
+      `Detailed plan (opens in browser — no app needed)\n` +
+      `${planUrl}`
     );
   }
 
@@ -1667,9 +1696,41 @@
     state.screen = "route";
     state.routeAsk = "";
     state.routeAskAnswer = "";
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("trip", id);
+      url.hash = "";
+      history.replaceState(null, "", url.pathname + url.search);
+    } catch (_) {}
     const r = routeById(id);
     if (r) loadWeather(r);
     render();
+  }
+
+  function applyDeepLink() {
+    let id = "";
+    try {
+      const params = new URLSearchParams((location && location.search) || "");
+      id = params.get("trip") || "";
+    } catch (_) {}
+    if (!id) {
+      const h = (typeof location !== "undefined" && location.hash) || "";
+      const m = /^#\/?trip\/(.+)$/.exec(h);
+      if (m) {
+        id = m[1];
+        try {
+          id = decodeURIComponent(id);
+        } catch (_) {}
+      }
+    } else {
+      try {
+        id = decodeURIComponent(id);
+      } catch (_) {}
+    }
+    if (!id || !routeById(id)) return false;
+    state.routeId = id;
+    state.screen = "route";
+    return true;
   }
 
   async function loadWeather(route) {
@@ -1731,14 +1792,29 @@
       headerHome.addEventListener("click", (e) => {
         e.preventDefault();
         state.screen = "home";
+        try {
+          history.replaceState(null, "", location.pathname + location.search);
+        } catch (_) {}
         render();
       });
     }
     wireLightboxOnce();
+    applyDeepLink();
+    window.addEventListener("hashchange", () => {
+      if (applyDeepLink()) {
+        const r = routeById(state.routeId);
+        if (r) loadWeather(r);
+        render();
+      }
+    });
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     }
     render();
+    if (state.screen === "route" && state.routeId) {
+      const r = routeById(state.routeId);
+      if (r) loadWeather(r);
+    }
   }
 
   // exports for tests

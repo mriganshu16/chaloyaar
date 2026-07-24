@@ -273,7 +273,10 @@ async function main() {
   const share = CY.shareText(CY.routeById("nandi-hills-sunrise"), "bike");
   assert(share.includes("Nandi Hills"), "share text has name");
   assert(share.includes("google.com/maps"), "share text has gmaps");
-  assert(share.includes("ChaloYaar"), "share text has app link");
+  assert(share.includes("ChaloYaar") || share.includes("chaloyaar"), "share text has app link");
+  assert(/https:\/\/\S+\?trip=/.test(share), "share text has https trip deep link");
+  assert(!share.includes("Pit stops"), "share text stays short");
+  assert(!/cost|₹/i.test(share.split("Maps")[0]), "share text omits cost");
   const mapsBtn = document.getElementById("btn-maps");
   assert(mapsBtn && mapsBtn.getAttribute("href").includes("google.com/maps"), "maps button href ok");
 
