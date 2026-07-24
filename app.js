@@ -173,16 +173,36 @@
 
   function shareText(route, modeId) {
     const m = modeMeta(modeId);
-    const stops = (route.stops || []).slice(0, 4).map((s) => `• ${s.name}`).join("\n");
-    const appUrl = typeof location !== "undefined" ? location.href.split("#")[0] : "https://chaloyaar.app";
+    const stops = (route.stops || [])
+      .slice(0, 5)
+      .map((s) => `• ${s.name}${s.note ? ` — ${s.note}` : ""}`)
+      .join("\n");
+    const flags = (route.flags || []).slice(0, 3).map((f) => `• ${f}`).join("\n");
+    const appUrl =
+      typeof location !== "undefined" ? location.href.split("#")[0] : "https://chaloyaar.app";
+    const why = (route.why || "").trim();
+    const whyShort = why.length > 220 ? why.slice(0, 217).trim() + "…" : why;
+
     return (
-      `${m.label} · ${route.name}\n` +
-      `${route.tagline}\n` +
-      `${route.ride_time} · ${route.distance_km} km · ${route.cost}\n` +
-      `when: ${route.best_time}\n` +
-      (stops ? `stops:\n${stops}\n` : "") +
-      `maps: ${mapsLink(route, modeId)}\n` +
-      `planned on ChaloYaar → ${appUrl}`
+      `*ChaloYaar trip card*\n` +
+      `────────────────────\n\n` +
+      `*${route.name}*\n` +
+      (route.tagline ? `_${route.tagline}_\n\n` : `\n`) +
+      `*At a glance*\n` +
+      `• Mode: ${m.label}\n` +
+      `• Time: ${route.ride_time}\n` +
+      `• Distance: ${route.distance_km} km\n` +
+      `• Cost: ${route.cost}\n` +
+      (route.best_time ? `• When: ${route.best_time}\n` : "") +
+      `\n` +
+      (whyShort ? `*Why this slaps*\n${whyShort}\n\n` : "") +
+      (stops ? `*Pit stops*\n${stops}\n\n` : "") +
+      (flags ? `*Respect these*\n${flags}\n\n` : "") +
+      `*Maps*\n${mapsLink(route, modeId)}\n\n` +
+      `────────────────────\n` +
+      `Planned on *ChaloYaar*\n` +
+      `Free · No login · Time-budget first\n` +
+      `${appUrl}`
     );
   }
 
@@ -586,22 +606,60 @@
     });
   }
 
-  function goSearchMore() {
+  function buildMorePrompt() {
     const b = BUDGETS.find((x) => x.id === state.budget);
     const loc = state.loc || CURATED_CITY;
-    const budgetLabel = b ? `${b.label} (${b.sub})` : "a trip";
-    const prompt =
+    const budgetLabel = b ? `${b.label} (${b.sub.split("·")[0].trim()})` : "a trip";
+    return (
       `more trips near ${loc} for ${budgetLabel}, mode: ${modeMeta(state.mode).label}. ` +
-      `prefer lesser-known stops, food, and realistic timing.`;
-    const existing = lsGet(LS.aiPrompt, "").trim();
-    lsSet(LS.aiPrompt, existing ? `${existing} · ${prompt}` : prompt);
+      `prefer lesser-known stops, food, and realistic timing. give options distinct from the usual crowd magnets.`
+    );
+  }
+
+  function ensureAiPromptForResults(opts) {
+    const appendMore = !!(opts && opts.appendMore);
+    let prompt = lsGet(LS.aiPrompt, "").trim();
+    const seed = buildMorePrompt();
+    if (!prompt) {
+      prompt = seed;
+    } else if (appendMore) {
+      const nudge = "Find more distinct options for the same vibe — avoid repeating the same destinations.";
+      if (!/find more distinct options/i.test(prompt)) {
+        prompt = `${prompt}\n\n${nudge}`;
+      }
+    }
+    lsSet(LS.aiPrompt, prompt);
     if (state.budget) lsSet(LS.aiBudget, state.budget);
+    return prompt;
+  }
+
+  function editFeelings() {
+    ensureAiPromptForResults({ appendMore: false });
     state.screen = "ai";
     render();
     requestAnimationFrame(() => {
       const ta = document.getElementById("ai-prompt");
-      if (ta) ta.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (ta) {
+        ta.focus();
+        ta.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     });
+  }
+
+  async function searchMoreTrips() {
+    if (!getKey(getProvider())) {
+      toast("Add a free Gemini key in Settings to search for more");
+      state.screen = "settings";
+      render();
+      return;
+    }
+    ensureAiPromptForResults({ appendMore: true });
+    await cookTrips();
+  }
+
+  /** @deprecated use searchMoreTrips / editFeelings */
+  function goSearchMore() {
+    editFeelings();
   }
 
   /* ---------- weather ---------- */
@@ -1172,8 +1230,11 @@
       ${
         hasSearch || routes.length
           ? `<div class="block">
-               <button type="button" class="btn" id="btn-search-more">Search for more</button>
-               <p class="hint" style="margin-top:8px">Opens Ask AI with your place and time budget prefilled.</p>
+               <div class="stack-tight">
+                 <button type="button" class="btn" id="btn-search-more"${state.aiBusy ? " disabled" : ""}>${state.aiBusy ? "Cooking more…" : "Search for more"}</button>
+                 <button type="button" class="btn secondary" id="btn-edit-feelings">Edit your feelings</button>
+               </div>
+               <p class="hint" style="margin-top:8px">Search cooks more trips from your prompt. Edit lets you tweak the vibe first.</p>
              </div>`
           : ""
       }
@@ -1337,8 +1398,9 @@
           ? `<div class="block block-lg route-list">
                <h3 class="section-h">fresh from the kitchen</h3>
                ${recent.map(routeCardHtml).join("")}
-               <div style="margin-top:14px">
-                 <button type="button" class="btn" id="btn-search-more">search for more</button>
+               <div class="stack-tight" style="margin-top:14px">
+                 <button type="button" class="btn" id="btn-search-more"${state.aiBusy ? " disabled" : ""}>${state.aiBusy ? "Cooking more…" : "Search for more"}</button>
+                 <button type="button" class="btn secondary" id="btn-edit-feelings">Edit your feelings</button>
                </div>
              </div>`
           : ""
@@ -1487,7 +1549,9 @@
       const ai = document.getElementById("btn-goto-ai");
       if (ai) ai.addEventListener("click", () => { state.screen = "ai"; render(); });
       const more = document.getElementById("btn-search-more");
-      if (more) more.addEventListener("click", () => goSearchMore());
+      if (more) more.addEventListener("click", () => searchMoreTrips());
+      const editFeel = document.getElementById("btn-edit-feelings");
+      if (editFeel) editFeel.addEventListener("click", () => editFeelings());
     },
     route() {
       const back = document.getElementById("btn-back-results");
@@ -1562,7 +1626,9 @@
         el.addEventListener("click", () => openRoute(el.getAttribute("data-route")));
       });
       const more = document.getElementById("btn-search-more");
-      if (more) more.addEventListener("click", () => goSearchMore());
+      if (more) more.addEventListener("click", () => searchMoreTrips());
+      const editFeel = document.getElementById("btn-edit-feelings");
+      if (editFeel) editFeel.addEventListener("click", () => editFeelings());
     },
     saved() {
       document.querySelectorAll("[data-route]").forEach((el) => {
@@ -1685,6 +1751,8 @@
     mapsLink,
     transitMapsLink,
     shareText,
+    searchMoreTrips,
+    editFeelings,
     parseRoutes,
     fillRouteDefaults,
     stripFences,

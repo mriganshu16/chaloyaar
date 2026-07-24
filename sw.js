@@ -1,5 +1,5 @@
 /* ChaloYaar service worker — cache-first app shell. Never intercept cross-origin APIs. */
-const CACHE = "chaloyaar-v13";
+const CACHE = "chaloyaar-v14";
 const SHELL = [
   "./",
   "./index.html",
