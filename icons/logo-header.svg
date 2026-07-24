@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 56" fill="none" role="img" aria-label="ChaloYaar">
+  <!-- pin -->
+  <path fill="#1B2430" d="M28 4c-11 0-20 9-20 20 0 14 20 28 20 28s20-14 20-28c0-11-9-20-20-20z"/>
+  <circle cx="28" cy="22" r="9" fill="none" stroke="#80EBCA" stroke-width="3.5"/>
+  <circle cx="28" cy="22" r="4" fill="#80EBCA"/>
+  <!-- wordmark -->
+  <text x="62" y="36" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="28" font-weight="800" letter-spacing="-0.5">
+    <tspan fill="#1B2430">Chalo</tspan><tspan fill="#80EBCA">Yaar</tspan>
+  </text>
+</svg>

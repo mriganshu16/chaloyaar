@@ -6,12 +6,12 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#FAF6EF",
-  "theme_color": "#1F3D2B",
+  "background_color": "#F5F5F5",
+  "theme_color": "#0F1115",
   "lang": "en-IN",
   "icons": [
     {
-      "src": "icons/icon.svg",
+      "src": "icons/logo-mark.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

@@ -1,5 +1,5 @@
 /* ChaloYaar service worker — cache-first app shell. Never intercept cross-origin APIs. */
-const CACHE = "chaloyaar-v3";
+const CACHE = "chaloyaar-v11";
 const SHELL = [
   "./",
   "./index.html",
@@ -7,6 +7,7 @@ const SHELL = [
   "./data.js",
   "./manifest.webmanifest",
   "./icons/icon.svg",
+  "./icons/logo-mark.svg",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];

@@ -201,8 +201,8 @@ async function main() {
   assert(CY.state.mode === "flexible", "default mode is flexible");
   assert(CY.state.modeAsked === false, "first-run mode not asked yet");
   const viewText = () => document.getElementById("view").textContent;
-  assert(viewText().includes("first things first"), "first-run mode card visible");
-  assert(viewText().includes("how do you move"), "mode question copy");
+  assert(viewText().includes("How do you usually move"), "first-run mode card visible");
+  assert(viewText().toLowerCase().includes("how do you"), "mode question copy");
 
   section("one-tap time card → results");
   const quick = document.querySelector('[data-budget="quick"]');
@@ -338,7 +338,7 @@ async function main() {
   assert(window.localStorage.getItem(CY.LS.modeAsked) === "1", "mode asked persisted");
   CY.state.screen = "home";
   CY.render();
-  assert(!viewText().includes("first things first"), "first-run card hidden after choose");
+  assert(!viewText().includes("How do you usually move"), "first-run card hidden after choose");
 
   section("weather verdict helper");
   assert(CY.weatherVerdict({ rainProb: 80, code: 1 }).includes("heavy rain"), "heavy rain verdict");

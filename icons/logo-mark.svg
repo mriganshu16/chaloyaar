@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="ChaloYaar">
+  <path fill="#1B2430" d="M32 4C19.85 4 10 13.85 10 26c0 16 22 34 22 34s22-18 22-34C54 13.85 44.15 4 32 4z"/>
+  <circle cx="32" cy="24" r="11" fill="none" stroke="#80EBCA" stroke-width="4"/>
+  <circle cx="32" cy="24" r="5" fill="#80EBCA"/>
+</svg>

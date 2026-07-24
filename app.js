@@ -24,21 +24,22 @@
     geminiModels: "cr_gemini_models",
     geminiWinner: "cr_gemini_winner",
     weather: "cr_weather_cache",
+    photos: "cr_photo_cache",
   };
 
   const BUDGETS = [
-    { id: "quick", label: "quick escape", sub: "2–3 hrs" },
-    { id: "half", label: "half-day arc", sub: "4–6 hrs" },
-    { id: "full", label: "main character day", sub: "full day" },
-    { id: "weekend", label: "weekend reset", sub: "2 days" },
-    { id: "long", label: "the whole saga", sub: "3+ days" },
+    { id: "quick", label: "Quick escape", sub: "2–3 hrs" },
+    { id: "half", label: "Half-day arc", sub: "4–6 hrs" },
+    { id: "full", label: "Full day", sub: "One full day" },
+    { id: "weekend", label: "Weekend reset", sub: "2 days" },
+    { id: "long", label: "Long saga", sub: "3+ days" },
   ];
 
   const MODES = [
-    { id: "flexible", label: "flexible", maps: "driving", filter: null },
-    { id: "bike", label: "bike", maps: "driving", filter: "bike" },
-    { id: "car", label: "car", maps: "driving", filter: "car" },
-    { id: "public", label: "bus / train", maps: "transit", filter: "public" },
+    { id: "flexible", label: "Flexible", maps: "driving", filter: null },
+    { id: "bike", label: "Bike", maps: "driving", filter: "bike" },
+    { id: "car", label: "Car", maps: "driving", filter: "car" },
+    { id: "public", label: "Bus / train", maps: "transit", filter: "public" },
   ];
 
   const TICKER =
@@ -108,11 +109,18 @@
 
   function greeting() {
     const h = new Date().getHours();
-    if (h < 5) return "late night. plan something small for later.";
-    if (h < 12) return "morning. good weather for leaving the city.";
-    if (h < 17) return "afternoon. still enough daylight to make it count.";
-    if (h < 21) return "evening. sketch tomorrow before the day fills up.";
-    return "night. map a trip while the roads are quiet.";
+    if (h < 5) return "Still up?";
+    if (h < 12) return "Good morning";
+    if (h < 17) return "Good afternoon";
+    if (h < 21) return "Good evening";
+    return "Planning tonight?";
+  }
+
+  function greetingSub() {
+    const h = new Date().getHours();
+    if (h < 12) return "Pick a time window and we’ll line up trips near you.";
+    if (h < 17) return "Still enough daylight to make a short escape count.";
+    return "Sketch a trip now — go when you’re free.";
   }
 
   function modeMeta(id) {
@@ -257,6 +265,279 @@
     keyTest: "",
     detecting: false,
   };
+
+  /* ---------- place photos (Wikipedia / Commons, free, no key) ---------- */
+  function photoQuery(route) {
+    if (!route) return "";
+    const dest = (route.dest || "").split(",")[0].trim();
+    return dest || route.name || "";
+  }
+
+  function galleryQueries(route) {
+    if (!route) return [];
+    const qs = [photoQuery(route)];
+    const stops = Array.isArray(route.stops) ? route.stops : [];
+    stops.slice(0, 3).forEach((s) => {
+      const n = typeof s === "string" ? s : s && s.name;
+      if (n) qs.push(String(n).split(",")[0].trim());
+    });
+    return qs.filter((v, i, arr) => v && arr.indexOf(v) === i);
+  }
+
+  async function wikiSummaryPhoto(title) {
+    const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const src =
+      (j.originalimage && j.originalimage.source) ||
+      (j.thumbnail && j.thumbnail.source) ||
+      null;
+    if (!src) return null;
+    return {
+      url: src,
+      credit: "Wikipedia",
+      title: j.title || title,
+    };
+  }
+
+  async function commonsSearchPhotos(query, limit) {
+    const lim = Math.min(Math.max(limit || 8, 1), 12);
+    const api =
+      "https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*" +
+      "&generator=search&gsrnamespace=6&gsrlimit=" +
+      lim +
+      "&gsrsearch=" +
+      encodeURIComponent(query) +
+      "&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth=900";
+    const res = await fetch(api);
+    if (!res.ok) return [];
+    const j = await res.json();
+    const pages = j.query && j.query.pages ? Object.values(j.query.pages) : [];
+    const out = [];
+    for (const p of pages) {
+      const info = p.imageinfo && p.imageinfo[0];
+      if (!info) continue;
+      if (info.mime && !String(info.mime).startsWith("image/")) continue;
+      const src = info.thumburl || info.url;
+      if (!src) continue;
+      out.push({
+        url: src,
+        full: info.url || src,
+        credit: "Wikimedia Commons",
+        title: (p.title || query).replace(/^File:/, ""),
+      });
+    }
+    return out;
+  }
+
+  async function commonsSearchPhoto(query) {
+    const list = await commonsSearchPhotos(query, 5);
+    return list[0] || null;
+  }
+
+  function uniquePhotos(list) {
+    const seen = new Set();
+    const out = [];
+    for (const p of list || []) {
+      if (!p || !p.url) continue;
+      const key = p.url.replace(/\/\d+px-/, "/").split("?")[0];
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(p);
+    }
+    return out;
+  }
+
+  async function fetchPlacePhoto(query) {
+    const q = String(query || "").trim();
+    if (!q) return null;
+    const cache = lsJSON(LS.photos, {});
+    const hit = cache[q];
+    if (hit && Date.now() - hit.ts < 7 * 24 * 60 * 60 * 1000) return hit.data;
+
+    const candidates = [
+      q,
+      q.replace(/,.*$/, "").trim(),
+      q.replace(/\s+/g, "_"),
+    ].filter((v, i, arr) => v && arr.indexOf(v) === i);
+
+    let photo = null;
+    for (const title of candidates) {
+      try {
+        photo = await wikiSummaryPhoto(title);
+        if (photo) break;
+      } catch (_) {}
+    }
+    if (!photo) {
+      try {
+        photo = await commonsSearchPhoto(q);
+      } catch (_) {}
+    }
+
+    cache[q] = { ts: Date.now(), data: photo };
+    // keep cache from growing forever
+    const keys = Object.keys(cache);
+    if (keys.length > 80) {
+      keys
+        .sort((a, b) => (cache[a].ts || 0) - (cache[b].ts || 0))
+        .slice(0, keys.length - 80)
+        .forEach((k) => delete cache[k]);
+    }
+    lsSetJSON(LS.photos, cache);
+    return photo;
+  }
+
+  async function fetchPlaceGallery(queries) {
+    const list = (queries || []).map((q) => String(q || "").trim()).filter(Boolean);
+    if (!list.length) return [];
+    const cacheKey = "gal:" + list.join("|");
+    const cache = lsJSON(LS.photos, {});
+    const hit = cache[cacheKey];
+    if (hit && Date.now() - hit.ts < 7 * 24 * 60 * 60 * 1000 && Array.isArray(hit.data)) {
+      return hit.data;
+    }
+
+    const collected = [];
+    for (const q of list.slice(0, 4)) {
+      try {
+        const wiki = await wikiSummaryPhoto(q);
+        if (wiki) collected.push(wiki);
+      } catch (_) {}
+      try {
+        const more = await commonsSearchPhotos(q + " India", 6);
+        collected.push(...more);
+      } catch (_) {}
+      if (collected.length >= 10) break;
+    }
+
+    const photos = uniquePhotos(collected).slice(0, 10);
+    cache[cacheKey] = { ts: Date.now(), data: photos };
+    const keys = Object.keys(cache);
+    if (keys.length > 100) {
+      keys
+        .sort((a, b) => (cache[a].ts || 0) - (cache[b].ts || 0))
+        .slice(0, keys.length - 100)
+        .forEach((k) => delete cache[k]);
+    }
+    lsSetJSON(LS.photos, cache);
+    return photos;
+  }
+
+  function applyHeroPhoto(hero, creditEl, photo, indexLabel) {
+    if (!hero || !photo || !photo.url) return;
+    hero.src = photo.url;
+    hero.alt = photo.title || "Place photo";
+    if (creditEl) {
+      const idx = indexLabel ? ` · ${indexLabel}` : "";
+      creditEl.textContent = `Photo · ${photo.credit}${idx}`;
+    }
+  }
+
+  function hydratePhotos() {
+    document.querySelectorAll("[data-photo-q]").forEach((el) => {
+      if (el.closest("[data-gallery-root]")) return;
+      const q = el.getAttribute("data-photo-q");
+      if (!q) return;
+      fetchPlacePhoto(q).then((photo) => {
+        if (!photo || !photo.url) return;
+        if (el.tagName === "IMG") {
+          el.src = photo.url;
+          el.alt = photo.title || q;
+          const credit = el.nextElementSibling;
+          if (credit && credit.classList.contains("photo-credit")) {
+            credit.textContent = `Photo · ${photo.credit}`;
+          }
+        } else {
+          el.style.backgroundImage = `url("${photo.url.replace(/"/g, '\\"')}")`;
+          el.classList.add("has-photo");
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-gallery-root]").forEach((root) => {
+      const queriesRaw = root.getAttribute("data-gallery-q") || "";
+      const queries = queriesRaw.split("|").map((s) => s.trim()).filter(Boolean);
+      const hero = root.querySelector(".hero-photo");
+      const credit = root.querySelector(".photo-credit");
+      const strip = root.querySelector(".gallery-strip");
+      if (!queries.length || !strip) return;
+
+      fetchPlaceGallery(queries).then((photos) => {
+        if (!photos.length) {
+          strip.innerHTML = `<p class="fine" style="margin:0">No extra photos found for this place.</p>`;
+          if (credit) credit.textContent = "Photo unavailable";
+          return;
+        }
+
+        let active = 0;
+        applyHeroPhoto(hero, credit, photos[0], `1/${photos.length}`);
+
+        strip.innerHTML = photos
+          .map(
+            (p, i) =>
+              `<button type="button" class="gallery-thumb ${i === 0 ? "on" : ""}" data-g-i="${i}" aria-label="Photo ${i + 1}: ${esc(p.title || "place")}">
+                <img src="${esc(p.url)}" alt="" loading="lazy" />
+              </button>`
+          )
+          .join("");
+
+        strip.querySelectorAll("[data-g-i]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const i = Number(btn.getAttribute("data-g-i"));
+            if (!Number.isFinite(i) || !photos[i]) return;
+            active = i;
+            applyHeroPhoto(hero, credit, photos[i], `${i + 1}/${photos.length}`);
+            strip.querySelectorAll(".gallery-thumb").forEach((t, ti) => {
+              t.classList.toggle("on", ti === i);
+            });
+          });
+        });
+
+        // swipe on hero for phones
+        if (hero) {
+          let startX = 0;
+          hero.addEventListener(
+            "touchstart",
+            (e) => {
+              startX = e.changedTouches[0].clientX;
+            },
+            { passive: true }
+          );
+          hero.addEventListener(
+            "touchend",
+            (e) => {
+              const dx = e.changedTouches[0].clientX - startX;
+              if (Math.abs(dx) < 40) return;
+              const next = dx < 0 ? active + 1 : active - 1;
+              if (next < 0 || next >= photos.length) return;
+              const btn = strip.querySelector(`[data-g-i="${next}"]`);
+              if (btn) btn.click();
+            },
+            { passive: true }
+          );
+        }
+      });
+    });
+  }
+
+  function goSearchMore() {
+    const b = BUDGETS.find((x) => x.id === state.budget);
+    const loc = state.loc || CURATED_CITY;
+    const budgetLabel = b ? `${b.label} (${b.sub})` : "a trip";
+    const prompt =
+      `more trips near ${loc} for ${budgetLabel}, mode: ${modeMeta(state.mode).label}. ` +
+      `prefer lesser-known stops, food, and realistic timing.`;
+    const existing = lsGet(LS.aiPrompt, "").trim();
+    lsSet(LS.aiPrompt, existing ? `${existing} · ${prompt}` : prompt);
+    if (state.budget) lsSet(LS.aiBudget, state.budget);
+    state.screen = "ai";
+    render();
+    requestAnimationFrame(() => {
+      const ta = document.getElementById("ai-prompt");
+      if (ta) ta.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
 
   /* ---------- weather ---------- */
   function weatherCacheKey(lat, lng) {
@@ -656,7 +937,7 @@
     const prompt = lsGet(LS.aiPrompt, "").trim();
     const budget = lsGet(LS.aiBudget, state.budget || "half");
     if (!prompt) {
-      toast("tell the bestie what you're craving first");
+      toast("Write what you're craving first");
       return;
     }
     state.aiBusy = true;
@@ -716,20 +997,24 @@
 
   function routeCardHtml(r) {
     const vibes = (r.vibe || []).slice(0, 3).join(" · ");
+    const q = photoQuery(r);
     return `<button type="button" class="route-card" data-route="${esc(r.id)}">
-      <div>
-        <span class="name">${esc(r.name)}</span>
-        ${r.ai ? `<span class="badge-ai">AI-made</span>` : ""}
+      <div class="route-photo" data-photo-q="${esc(q)}" aria-hidden="true"></div>
+      <div class="route-body">
+        <div>
+          <span class="name">${esc(r.name)}</span>
+          ${r.ai ? `<span class="badge-ai">AI-made</span>` : ""}
+        </div>
+        <div class="tagline">${esc(r.tagline)}</div>
+        <div class="stat-chips">
+          <span class="stat">${esc(r.ride_time)}</span>
+          <span class="stat">${esc(String(r.distance_km))} km</span>
+          <span class="stat">${esc(r.cost)}</span>
+          ${vibes ? `<span class="stat">${esc(vibes)}</span>` : ""}
+        </div>
+        ${r.ai ? `<div class="fine">AI-made — verify timings and road status</div>` : ""}
+        <div class="tap-affordance">open full plan</div>
       </div>
-      <div class="muted" style="margin-top:6px">${esc(r.tagline)}</div>
-      <div class="stat-chips">
-        <span class="stat">${esc(r.ride_time)}</span>
-        <span class="stat">${esc(String(r.distance_km))} km</span>
-        <span class="stat">${esc(r.cost)}</span>
-        ${vibes ? `<span class="stat">${esc(vibes)}</span>` : ""}
-      </div>
-      ${r.ai ? `<div class="fine">AI-made — verify timings and road status</div>` : ""}
-      <div class="tap-affordance">open full plan</div>
     </button>`;
   }
 
@@ -742,42 +1027,46 @@
   function viewHome() {
     const firstRun = !state.modeAsked;
     return `
-      <div class="hero-block">
-        <div class="brand">chalo<em>yaar</em></div>
-        <span class="hero-tag shift">no login · no ads</span>
+      <div class="block">
         <p class="greeting">${esc(greeting())}</p>
+        <p class="greeting-sub">${esc(greetingSub())}</p>
       </div>
+      <div class="block">
+        <span class="label-sm" id="loc-label">Where are you starting from?</span>
+        <div class="stack-tight">
+          <input class="field search-like" id="loc-input" aria-labelledby="loc-label" placeholder="Search city or area" value="${esc(state.loc)}" autocomplete="off" />
+          <button type="button" class="btn-link" id="btn-detect">${state.detecting ? "Detecting location…" : "Use my current location"}</button>
+        </div>
+      </div>
+      <div class="block">
       ${
         firstRun
-          ? `<div class="card accent-edge offset" style="margin-bottom:18px">
-              <strong style="font-family:Fraunces,serif;font-size:1.2rem;letter-spacing:-0.02em">first things first — how do you move?</strong>
-              <p class="fine" style="margin:8px 0 12px">default is flexible until you pick. this tunes every tip and map link.</p>
+          ? `<div class="card accent-edge">
+              <strong style="font-size:15px;font-weight:700">How do you usually move?</strong>
+              <p class="fine" style="margin:6px 0 10px">This tunes tips and map links. You can change it anytime.</p>
               ${modeChipsHtml(state.mode, "first-mode")}
             </div>`
-          : ""
+          : `<span class="label-sm">Travel mode</span>
+             ${modeChipsHtml(state.mode)}`
       }
-      <div class="airy">
-        <span class="label-sm">i move by</span>
-        ${modeChipsHtml(state.mode)}
       </div>
-      <span class="label-sm" id="loc-label">starting from</span>
-      <div class="stack" style="margin-top:0">
-        <input class="field" id="loc-input" aria-labelledby="loc-label" placeholder="city / area (e.g. Bengaluru)" value="${esc(state.loc)}" autocomplete="off" />
-        <button type="button" class="btn green" id="btn-detect">${state.detecting ? "detecting…" : "detect my location automatically"}</button>
+      <div class="block block-lg">
+        <div class="block-head">
+          <h2 class="section-h">How much time do you have?</h2>
+          <p class="hint">Tap a slot — trips show up instantly.</p>
+        </div>
+        <div class="budget-grid" role="list">
+          ${BUDGETS.map(
+            (b) => `<button type="button" class="budget-card" data-budget="${esc(b.id)}" role="listitem">
+              <div class="label">${esc(b.label)}</div>
+              <div class="sub">${esc(b.sub)}</div>
+            </button>`
+          ).join("")}
+        </div>
+        <div style="margin-top:12px">
+          <button type="button" class="btn secondary" id="btn-surprise">Surprise me</button>
+        </div>
       </div>
-      <div class="gap-lg"></div>
-      <h2 class="section-h" style="font-size:1.75rem;max-width:12ch">how much time you got?</h2>
-      <p class="hint">tap one — trips appear instantly.</p>
-      <div class="budget-grid" role="list">
-        ${BUDGETS.map(
-          (b) => `<button type="button" class="budget-card" data-budget="${esc(b.id)}" role="listitem">
-            <div class="label">${esc(b.label)}</div>
-            <div class="sub">${esc(b.sub)}</div>
-          </button>`
-        ).join("")}
-      </div>
-      <div class="gap"></div>
-      <button type="button" class="btn secondary" id="btn-surprise">surprise me — too tired to choose</button>
     `;
   }
 
@@ -786,27 +1075,39 @@
     routes = filterByMode(routes, state.mode);
     const b = BUDGETS.find((x) => x.id === state.budget);
     const showAiBanner = !isBengaluruLoc(state.loc);
+    const hasSearch = !!(state.loc && state.loc.trim());
     return `
-      <div id="results-top" class="topbar">
-        <button type="button" class="btn sm secondary" id="btn-back-home">change time</button>
+      <div class="block" id="results-top">
+        <div class="topbar">
+          <button type="button" class="btn sm secondary" id="btn-back-home">Back</button>
+        </div>
+        <h2 class="display">${esc(b ? b.label : "Trips")}</h2>
+        <p class="hint" style="margin-top:6px">${routes.length} trip${routes.length === 1 ? "" : "s"} ready${hasSearch ? ` · from ${esc(state.loc)}` : ""}</p>
+        ${modeChipsHtml(state.mode)}
       </div>
-      <h2 class="display" style="font-size:2rem;text-transform:lowercase;max-width:14ch">${esc(b ? b.label : "trips")}</h2>
-      <p class="hint">${routes.length} trip${routes.length === 1 ? "" : "s"} ready</p>
-      ${modeChipsHtml(state.mode)}
-      <div class="gap"></div>
       ${
         showAiBanner
-          ? `<div class="banner">not seeing your city in the curated pack? open <strong>ai bestie</strong> — paste a free Gemini key in settings and cook trips for anywhere.</div>`
+          ? `<div class="block"><div class="banner">Not seeing your city in the curated pack? Open <strong>Ask AI</strong> — paste a free Gemini key in Settings and cook trips for anywhere.</div></div>`
           : ""
       }
+      <div class="block block-lg route-list">
       ${
         routes.length
           ? routes.map(routeCardHtml).join("")
           : `<div class="empty">
               <div class="display">nothing for this combo yet</div>
-              <p class="muted">try another mode, or let ai bestie draft something.</p>
-              <button type="button" class="btn green" id="btn-goto-ai" style="margin-top:14px">open ai bestie</button>
+              <p class="muted">Try another mode, or let Ask AI draft something.</p>
+              <button type="button" class="btn green" id="btn-goto-ai" style="margin-top:10px">Open Ask AI</button>
             </div>`
+      }
+      </div>
+      ${
+        hasSearch || routes.length
+          ? `<div class="block">
+               <button type="button" class="btn" id="btn-search-more">Search for more</button>
+               <p class="hint" style="margin-top:8px">Opens Ask AI with your place and time budget prefilled.</p>
+             </div>`
+          : ""
       }
     `;
   }
@@ -865,36 +1166,60 @@
       body = stops + bikeTips + carTips + pubTips + facts + flags + transit;
     }
 
+    const photoQ = photoQuery(route);
+    const galQs = galleryQueries(route).join("|");
+    const photoBlock = `<div class="place-media" data-gallery-root data-gallery-q="${esc(galQs)}">
+        <img class="hero-photo" data-photo-q="${esc(photoQ)}" alt="" width="800" height="200" />
+        <p class="photo-credit">Loading place photos…</p>
+        <div class="gallery-head">
+          <span class="label-sm" style="margin:0">Gallery</span>
+          <span class="fine">Tap a photo · swipe the banner</span>
+        </div>
+        <div class="gallery-strip" role="list" aria-label="Place photo gallery">
+          <p class="fine" style="margin:0">Finding photos…</p>
+        </div>
+      </div>`;
+
     return `
-      <div class="topbar">
-        <button type="button" class="btn sm secondary" id="btn-back-results">back</button>
-      </div>
-      <div class="card offset accent-edge">
-        <span class="pill green">${esc(m.label)}</span>
-        <h1 class="display" style="font-size:1.85rem;margin-top:12px;text-transform:lowercase;max-width:14ch">${esc(route.name)}</h1>
-        ${route.ai ? `<span class="badge-ai" style="margin-top:8px;display:inline-block">AI-made — verify timings and road status</span>` : ""}
-        <p style="margin:12px 0 0;color:var(--ink-soft)">${esc(route.tagline)}</p>
-        <div class="stat-chips">
-          <span class="stat">${esc(m.label)}</span>
-          <span class="stat">${esc(String(route.distance_km))} km</span>
-          <span class="stat">${esc(route.ride_time)}</span>
-          <span class="stat">${esc(route.cost)}</span>
+      <div class="block">
+        <div class="topbar">
+          <button type="button" class="btn sm secondary" id="btn-back-results">back</button>
         </div>
-        <div class="action-grid">
-          <a class="btn sm green" id="btn-maps" href="${esc(mapsLink(route, state.mode))}" target="_blank" rel="noopener">${mapsLabel}</a>
-          <button type="button" class="btn sm ${saved ? "ink" : "secondary"}" id="btn-save">${saved ? "saved" : "save"}</button>
-          <button type="button" class="btn sm secondary" id="btn-share">share</button>
-          <button type="button" class="btn sm" id="btn-wa">WhatsApp</button>
-          <button type="button" class="btn sm secondary" id="btn-copy" style="grid-column:1/-1">copy trip card</button>
+        ${photoBlock}
+        <div class="card offset accent-edge">
+          <span class="pill green">${esc(m.label)}</span>
+          <h1 class="display" style="font-size:2.1rem;margin-top:8px;text-transform:lowercase;max-width:12ch;line-height:0.95">${esc(route.name)}</h1>
+          ${route.ai ? `<span class="badge-ai" style="margin-top:6px;display:inline-block">AI-made — verify timings and road status</span>` : ""}
+          <p style="margin:8px 0 0;color:var(--ink-soft);font-size:0.88rem;line-height:1.35">${esc(route.tagline)}</p>
+          <div class="stat-chips">
+            <span class="stat">${esc(m.label)}</span>
+            <span class="stat">${esc(String(route.distance_km))} km</span>
+            <span class="stat">${esc(route.ride_time)}</span>
+            <span class="stat">${esc(route.cost)}</span>
+          </div>
+          <div class="action-grid">
+            <a class="btn sm green" id="btn-maps" href="${esc(mapsLink(route, state.mode))}" target="_blank" rel="noopener">${mapsLabel}</a>
+            <button type="button" class="btn sm ${saved ? "ink" : "secondary"}" id="btn-save">${saved ? "saved" : "save"}</button>
+            <button type="button" class="btn sm secondary" id="btn-share">share</button>
+            <button type="button" class="btn sm" id="btn-wa">WhatsApp</button>
+            <button type="button" class="btn sm secondary" id="btn-copy" style="grid-column:1/-1">copy trip card</button>
+          </div>
         </div>
       </div>
-      ${why}${when}${weatherHtml}${body}
-      <div class="card green-fill" style="margin-top:28px">
-        <strong style="font-family:Fraunces,serif;font-size:1.25rem;letter-spacing:-0.02em">ask the ai bestie about this route</strong>
-        <p class="fine" style="margin:8px 0 12px">needs your key in settings. answers stay grounded in this trip’s details.</p>
-        <textarea class="field" id="route-ask" placeholder="e.g. is this chill for a pillion beginner?" style="background:var(--paper);color:var(--ink)">${esc(state.routeAsk)}</textarea>
-        <button type="button" class="btn" id="btn-route-ask" style="margin-top:10px">${state.routeAskBusy ? "thinking…" : "ask"}</button>
-        ${state.routeAskAnswer ? `<div class="card panel" style="margin-top:12px;color:var(--ink)">${esc(state.routeAskAnswer)}</div>` : ""}
+      <div class="block block-lg">
+        ${why}${when}${weatherHtml}
+      </div>
+      <div class="block block-lg">
+        ${body}
+      </div>
+      <div class="block">
+        <div class="card green-fill">
+          <strong style="font-size:1.2rem;font-weight:700;letter-spacing:-0.02em;line-height:1.2">Ask AI about this route</strong>
+          <p class="fine" style="margin:6px 0 8px">needs your key in settings. answers stay grounded in this trip’s details.</p>
+          <textarea class="field" id="route-ask" placeholder="e.g. is this chill for a pillion beginner?" style="background:var(--paper);color:var(--ink)">${esc(state.routeAsk)}</textarea>
+          <button type="button" class="btn" id="btn-route-ask" style="margin-top:8px">${state.routeAskBusy ? "thinking…" : "ask"}</button>
+          ${state.routeAskAnswer ? `<div class="card panel" style="margin-top:10px;color:var(--ink)">${esc(state.routeAskAnswer)}</div>` : ""}
+        </div>
       </div>
     `;
   }
@@ -904,35 +1229,47 @@
     const budget = lsGet(LS.aiBudget, "half");
     const recent = lsJSON(LS.aiRoutes, []).slice(0, 8);
     return `
-      <div class="hero-block" style="padding-bottom:18px;margin-bottom:18px">
-        <div class="brand" style="font-size:2.4rem;max-width:10ch">ai <em>bestie</em></div>
-        <span class="hero-tag">bring your own key</span>
+      <div class="block hero-block" style="padding-bottom:10px">
+        <div class="brand" style="font-size:2rem;max-width:12ch">Ask AI</div>
+        <span class="hero-tag">Bring your own key</span>
       </div>
-      <p class="hint">spill the craving. chips append — they never wipe your prompt.</p>
-      <textarea class="field" id="ai-prompt" placeholder="e.g. quiet waterfalls within 3 hrs, vegetarian food stops, not crowded…">${esc(prompt)}</textarea>
-      <div class="chip-row" style="margin-top:12px">
-        ${AI_CHIPS.map((c) => `<button type="button" class="chip ai-add" data-add="${esc(c.t)}">+ ${esc(c.t)}</button>`).join("")}
-      </div>
-      <div class="dense-block" style="margin-top:22px">
-        <span class="label-sm" style="color:rgba(250,246,239,0.65)">time budget</span>
-        <div class="chip-row" role="radiogroup" aria-label="ai time budget">
-          ${BUDGETS.map(
-            (b) =>
-              `<button type="button" class="chip ${budget === b.id ? "on" : ""}" role="radio" aria-checked="${budget === b.id}" data-ai-budget="${esc(b.id)}">${esc(b.sub)}</button>`
-          ).join("")}
+      <div class="block">
+        <p class="hint">spill the craving. chips append — they never wipe your prompt.</p>
+        <textarea class="field" id="ai-prompt" placeholder="e.g. quiet waterfalls within 3 hrs, vegetarian food stops, not crowded…">${esc(prompt)}</textarea>
+        <div class="chip-row" style="margin-top:6px">
+          ${AI_CHIPS.map((c) => `<button type="button" class="chip ai-add" data-add="${esc(c.t)}">+ ${esc(c.t)}</button>`).join("")}
         </div>
       </div>
-      <button type="button" class="btn" id="btn-cook" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? "cooking…" : "cook my trip"}</button>
-      ${state.aiJustCooked || recent.length ? `<p class="hint">not quite it? edit your prompt above and cook again</p>` : ""}
-      ${state.aiError ? `<div class="banner warn">${esc(state.aiError)}</div>` : ""}
-      ${
-        !getKey(getProvider())
-          ? `<div class="banner">no key yet — open settings, grab a free Gemini key, then come cook.</div>`
-          : ""
-      }
+      <div class="block">
+        <div class="dense-block" style="margin:0">
+          <span class="label-sm" style="color:rgba(250,246,239,0.65)">time budget</span>
+          <div class="chip-row" role="radiogroup" aria-label="ai time budget">
+            ${BUDGETS.map(
+              (b) =>
+                `<button type="button" class="chip ${budget === b.id ? "on" : ""}" role="radio" aria-checked="${budget === b.id}" data-ai-budget="${esc(b.id)}">${esc(b.sub)}</button>`
+            ).join("")}
+          </div>
+        </div>
+        <div class="gap"></div>
+        <button type="button" class="btn" id="btn-cook" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? "cooking…" : "cook my trip"}</button>
+        ${state.aiJustCooked || recent.length ? `<p class="hint" style="margin-top:6px">not quite it? edit your prompt above and cook again</p>` : ""}
+        ${state.aiError ? `<div class="banner warn" style="margin-top:8px">${esc(state.aiError)}</div>` : ""}
+        ${
+          !getKey(getProvider())
+            ? `<div class="banner" style="margin-top:8px">no key yet — open settings, grab a free Gemini key, then come cook.</div>`
+            : ""
+        }
+      </div>
       ${
         recent.length
-          ? `<h3 class="section-h">fresh from the kitchen</h3>${recent.map(routeCardHtml).join("")}`
+          ? `<div class="block block-lg route-list">
+               <h3 class="section-h" style="font-size:1.45rem">fresh from the kitchen</h3>
+               ${recent.map(routeCardHtml).join("")}
+               <div style="margin-top:14px">
+                 <button type="button" class="btn" id="btn-search-more">search for more</button>
+                 <p class="hint" style="margin-top:6px">tweak the prompt above, or cook again with a tighter ask.</p>
+               </div>
+             </div>`
           : ""
       }
     `;
@@ -942,8 +1279,8 @@
     const ids = savedIds();
     const routes = ids.map(routeById).filter(Boolean);
     return `
-      <div class="hero-block" style="padding-bottom:16px">
-        <div class="brand" style="font-size:2.4rem">saved</div>
+      <div class="hero-block" style="padding-bottom:8px">
+        <div class="brand" style="font-size:2.1rem">saved</div>
         <span class="hero-tag">works offline</span>
       </div>
       ${
@@ -962,11 +1299,11 @@
     const provider = getProvider();
     const key = getKey(provider);
     return `
-      <div class="hero-block" style="padding-bottom:16px">
-        <div class="brand" style="font-size:2.4rem">settings</div>
+      <div class="hero-block" style="padding-bottom:8px">
+        <div class="brand" style="font-size:2.1rem">settings</div>
       </div>
       <div class="card accent-edge offset">
-        <strong style="font-family:Fraunces,serif;font-size:1.25rem;letter-spacing:-0.02em">bring your own key</strong>
+        <strong style="font-size:1.15rem;font-weight:700;letter-spacing:-0.02em">Bring your own key</strong>
         <p class="fine" style="margin:10px 0">your key never leaves your phone except to talk directly to the provider’s official API. we have no server. we literally cannot see it.</p>
         <label class="label-sm" for="ai-provider">provider</label>
         <select class="field" id="ai-provider">
@@ -989,13 +1326,13 @@
       </div>
       <div class="gap"></div>
       <div class="card panel">
-        <strong style="font-family:Fraunces,serif;font-size:1.15rem">install as an app</strong>
+        <strong style="font-size:1.05rem;font-weight:700">Install as an app</strong>
         <p class="fine" style="margin-top:8px"><strong>Android (Chrome):</strong> menu → Install app / Add to Home screen.</p>
         <p class="fine"><strong>iOS (Safari):</strong> Share → Add to Home Screen.</p>
       </div>
       <div class="gap"></div>
       <div class="card">
-        <strong style="font-family:Fraunces,serif;font-size:1.15rem">honest fine print</strong>
+        <strong style="font-size:1.05rem;font-weight:700">Honest fine print</strong>
         <p class="fine" style="margin-top:8px">no login, no accounts, no ads, no analytics, no tracking, no backend, no cost. all state lives in <span class="mono">localStorage</span> on this device. clearing site data wipes saved trips, keys, and prompts — forever. AI routes are suggestions: verify timings, road status, and water safety yourself. curated Bengaluru pack is hand-checked; still, conditions change.</p>
       </div>
       <p class="mono muted" style="margin-top:20px;text-align:left">ChaloYaar v${esc(VERSION)}</p>
@@ -1073,6 +1410,8 @@
       });
       const ai = document.getElementById("btn-goto-ai");
       if (ai) ai.addEventListener("click", () => { state.screen = "ai"; render(); });
+      const more = document.getElementById("btn-search-more");
+      if (more) more.addEventListener("click", () => goSearchMore());
     },
     route() {
       const back = document.getElementById("btn-back-results");
@@ -1146,6 +1485,8 @@
       document.querySelectorAll("[data-route]").forEach((el) => {
         el.addEventListener("click", () => openRoute(el.getAttribute("data-route")));
       });
+      const more = document.getElementById("btn-search-more");
+      if (more) more.addEventListener("click", () => goSearchMore());
     },
     saved() {
       document.querySelectorAll("[data-route]").forEach((el) => {
@@ -1205,10 +1546,10 @@
     const nav = document.getElementById("nav");
     if (!nav) return;
     const tabs = [
-      { id: "home", label: "let's go" },
-      { id: "ai", label: "ai bestie" },
-      { id: "saved", label: "saved" },
-      { id: "settings", label: "settings" },
+      { id: "home", label: "Home" },
+      { id: "ai", label: "Ask AI" },
+      { id: "saved", label: "Saved" },
+      { id: "settings", label: "Settings" },
     ];
     const active = ["results", "route"].includes(state.screen) ? "home" : state.screen;
     nav.innerHTML = tabs
@@ -1230,14 +1571,27 @@
     if (!root) return;
     const fn = views[state.screen] || viewHome;
     root.innerHTML = fn();
+    root.classList.remove("view-enter");
+    // reflow so animation can replay
+    void root.offsetWidth;
+    root.classList.add("view-enter");
     renderNav();
     const w = wire[state.screen];
     if (w) w();
+    hydratePhotos();
   }
 
   function boot() {
     const tick = document.getElementById("ticker");
     if (tick) tick.textContent = TICKER + TICKER;
+    const headerHome = document.getElementById("header-home");
+    if (headerHome) {
+      headerHome.addEventListener("click", (e) => {
+        e.preventDefault();
+        state.screen = "home";
+        render();
+      });
+    }
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     }
