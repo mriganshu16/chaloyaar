@@ -28,11 +28,11 @@
   };
 
   const BUDGETS = [
-    { id: "quick", label: "Quick escape", sub: "2–3 hrs" },
-    { id: "half", label: "Half-day arc", sub: "4–6 hrs" },
-    { id: "full", label: "Full day", sub: "One full day" },
-    { id: "weekend", label: "Weekend reset", sub: "2 days" },
-    { id: "long", label: "Long saga", sub: "3+ days" },
+    { id: "quick", label: "Quick escape", sub: "2–3 hrs · morning ride, back before anyone notices", tone: "lime" },
+    { id: "half", label: "Half-day arc", sub: "4–6 hrs · leave early, back by lunch-ish", tone: "sky" },
+    { id: "full", label: "Main character day", sub: "full day · sunrise to sunset energy", tone: "pink" },
+    { id: "weekend", label: "Weekend reset", sub: "2 days · out saturday, human again sunday", tone: "purple" },
+    { id: "long", label: "Long saga", sub: "3+ days · proper disappearing act", tone: "cream" },
   ];
 
   const MODES = [
@@ -43,7 +43,7 @@
   ];
 
   const TICKER =
-    "no login · no ads · ride, drive, or hop a bus · helmets and seatbelts · time-budget first · ai is optional · clear site data wipes everything · verify water before you dare · ";
+    "no login ★ no ads ★ no cap ★ free forever ★ ride safe ★ helmets & seatbelts ★ time-budget first ★ ask ai is optional ★ chai stops included ★ verify water before you dare ★ ";
 
   const PROVIDERS = [
     { id: "gemini", label: "Google Gemini (free tier — recommended)", ping: true },
@@ -434,6 +434,61 @@
     }
   }
 
+  let lightboxState = { photos: [], index: 0 };
+
+  function openLightbox(photos, index) {
+    const box = document.getElementById("lightbox");
+    const img = document.getElementById("lightbox-img");
+    const meta = document.getElementById("lightbox-meta");
+    if (!box || !img || !photos || !photos.length) return;
+    lightboxState = { photos, index: Math.max(0, Math.min(index || 0, photos.length - 1)) };
+    const p = lightboxState.photos[lightboxState.index];
+    img.src = p.full || p.url;
+    img.alt = p.title || "Place photo";
+    if (meta) {
+      meta.textContent = `${p.title || "Place"} · ${p.credit || ""} · ${lightboxState.index + 1}/${photos.length}`;
+    }
+    box.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeLightbox() {
+    const box = document.getElementById("lightbox");
+    if (box) box.hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  function stepLightbox(delta) {
+    const { photos } = lightboxState;
+    if (!photos.length) return;
+    const next = (lightboxState.index + delta + photos.length) % photos.length;
+    openLightbox(photos, next);
+  }
+
+  function wireLightboxOnce() {
+    if (wireLightboxOnce._done) return;
+    wireLightboxOnce._done = true;
+    const close = document.getElementById("lightbox-close");
+    const prev = document.getElementById("lightbox-prev");
+    const next = document.getElementById("lightbox-next");
+    const box = document.getElementById("lightbox");
+    if (close) close.addEventListener("click", closeLightbox);
+    if (prev) prev.addEventListener("click", () => stepLightbox(-1));
+    if (next) next.addEventListener("click", () => stepLightbox(1));
+    if (box) {
+      box.addEventListener("click", (e) => {
+        if (e.target === box) closeLightbox();
+      });
+    }
+    document.addEventListener("keydown", (e) => {
+      const lb = document.getElementById("lightbox");
+      if (!lb || lb.hidden) return;
+      if (e.key === "Escape") closeLightbox();
+      if (e.key === "ArrowLeft") stepLightbox(-1);
+      if (e.key === "ArrowRight") stepLightbox(1);
+    });
+  }
+
   function hydratePhotos() {
     document.querySelectorAll("[data-photo-q]").forEach((el) => {
       if (el.closest("[data-gallery-root]")) return;
@@ -461,17 +516,27 @@
       const hero = root.querySelector(".hero-photo");
       const credit = root.querySelector(".photo-credit");
       const strip = root.querySelector(".gallery-strip");
+      const expand = root.querySelector("[data-expand-photo]");
       if (!queries.length || !strip) return;
 
       fetchPlaceGallery(queries).then((photos) => {
         if (!photos.length) {
           strip.innerHTML = `<p class="fine" style="margin:0">No extra photos found for this place.</p>`;
           if (credit) credit.textContent = "Photo unavailable";
+          if (expand) expand.hidden = true;
           return;
         }
 
         let active = 0;
-        applyHeroPhoto(hero, credit, photos[0], `1/${photos.length}`);
+        const setActive = (i) => {
+          active = i;
+          applyHeroPhoto(hero, credit, photos[i], `${i + 1}/${photos.length}`);
+          strip.querySelectorAll(".gallery-thumb").forEach((t, ti) => {
+            t.classList.toggle("on", ti === i);
+          });
+        };
+
+        setActive(0);
 
         strip.innerHTML = photos
           .map(
@@ -486,16 +551,17 @@
           btn.addEventListener("click", () => {
             const i = Number(btn.getAttribute("data-g-i"));
             if (!Number.isFinite(i) || !photos[i]) return;
-            active = i;
-            applyHeroPhoto(hero, credit, photos[i], `${i + 1}/${photos.length}`);
-            strip.querySelectorAll(".gallery-thumb").forEach((t, ti) => {
-              t.classList.toggle("on", ti === i);
-            });
+            setActive(i);
           });
         });
 
-        // swipe on hero for phones
+        if (expand) {
+          expand.hidden = false;
+          expand.onclick = () => openLightbox(photos, active);
+        }
         if (hero) {
+          hero.style.cursor = "zoom-in";
+          hero.onclick = () => openLightbox(photos, active);
           let startX = 0;
           hero.addEventListener(
             "touchstart",
@@ -511,8 +577,7 @@
               if (Math.abs(dx) < 40) return;
               const next = dx < 0 ? active + 1 : active - 1;
               if (next < 0 || next >= photos.length) return;
-              const btn = strip.querySelector(`[data-g-i="${next}"]`);
-              if (btn) btn.click();
+              setActive(next);
             },
             { passive: true }
           );
@@ -1032,17 +1097,20 @@
         <p class="greeting-sub">${esc(greetingSub())}</p>
       </div>
       <div class="block">
-        <span class="label-sm" id="loc-label">Where are you starting from?</span>
-        <div class="stack-tight">
-          <input class="field search-like" id="loc-input" aria-labelledby="loc-label" placeholder="Search city or area" value="${esc(state.loc)}" autocomplete="off" />
-          <button type="button" class="btn-link" id="btn-detect">${state.detecting ? "Detecting location…" : "Use my current location"}</button>
+        <div class="card">
+          <span class="label-sm" id="loc-label">Starting from</span>
+          <div class="stack-tight">
+            <input class="field search-like" id="loc-input" aria-labelledby="loc-label" placeholder="Search city or area" value="${esc(state.loc)}" autocomplete="off" />
+            <button type="button" class="btn" id="btn-detect">${state.detecting ? "Detecting…" : "Detect my location"}</button>
+            <p class="fine" style="margin:0">Curated routes are for <strong>${esc(CURATED_CITY)}</strong> right now · other cities → <strong>Ask AI</strong> cooks them fresh</p>
+          </div>
         </div>
       </div>
       <div class="block">
       ${
         firstRun
           ? `<div class="card accent-edge">
-              <strong style="font-size:15px;font-weight:700">How do you usually move?</strong>
+              <strong style="font-size:15px;font-weight:800;font-family:IBM Plex Sans,sans-serif">How do you usually move?</strong>
               <p class="fine" style="margin:6px 0 10px">This tunes tips and map links. You can change it anytime.</p>
               ${modeChipsHtml(state.mode, "first-mode")}
             </div>`
@@ -1052,12 +1120,12 @@
       </div>
       <div class="block block-lg">
         <div class="block-head">
-          <h2 class="section-h">How much time do you have?</h2>
+          <h2 class="section-h">How much time you got?</h2>
           <p class="hint">Tap a slot — trips show up instantly.</p>
         </div>
         <div class="budget-grid" role="list">
           ${BUDGETS.map(
-            (b) => `<button type="button" class="budget-card" data-budget="${esc(b.id)}" role="listitem">
+            (b) => `<button type="button" class="budget-card tone-${esc(b.tone || "cream")}" data-budget="${esc(b.id)}" role="listitem">
               <div class="label">${esc(b.label)}</div>
               <div class="sub">${esc(b.sub)}</div>
             </button>`
@@ -1169,11 +1237,14 @@
     const photoQ = photoQuery(route);
     const galQs = galleryQueries(route).join("|");
     const photoBlock = `<div class="place-media" data-gallery-root data-gallery-q="${esc(galQs)}">
-        <img class="hero-photo" data-photo-q="${esc(photoQ)}" alt="" width="800" height="200" />
+        <div class="hero-wrap">
+          <img class="hero-photo" data-photo-q="${esc(photoQ)}" alt="" width="800" height="200" />
+          <button type="button" class="btn-expand" data-expand-photo>Expand</button>
+        </div>
         <p class="photo-credit">Loading place photos…</p>
         <div class="gallery-head">
           <span class="label-sm" style="margin:0">Gallery</span>
-          <span class="fine">Tap a photo · swipe the banner</span>
+          <span class="fine">Tap · swipe · expand</span>
         </div>
         <div class="gallery-strip" role="list" aria-label="Place photo gallery">
           <p class="fine" style="margin:0">Finding photos…</p>
@@ -1230,29 +1301,30 @@
     const recent = lsJSON(LS.aiRoutes, []).slice(0, 8);
     return `
       <div class="block hero-block" style="padding-bottom:10px">
-        <div class="brand" style="font-size:2rem;max-width:12ch">Ask AI</div>
-        <span class="hero-tag">Bring your own key</span>
+        <div class="brand">ask ai</div>
+        <p class="hint" style="margin-top:6px">tell it what you're feeling. it plans the whole thing.</p>
+        <span class="script-pill purple">unlimited routes</span>
       </div>
       <div class="block">
-        <p class="hint">spill the craving. chips append — they never wipe your prompt.</p>
-        <textarea class="field" id="ai-prompt" placeholder="e.g. quiet waterfalls within 3 hrs, vegetarian food stops, not crowded…">${esc(prompt)}</textarea>
-        <div class="chip-row" style="margin-top:6px">
-          ${AI_CHIPS.map((c) => `<button type="button" class="chip ai-add" data-add="${esc(c.t)}">+ ${esc(c.t)}</button>`).join("")}
-        </div>
-      </div>
-      <div class="block">
-        <div class="dense-block" style="margin:0">
-          <span class="label-sm" style="color:rgba(250,246,239,0.65)">time budget</span>
-          <div class="chip-row" role="radiogroup" aria-label="ai time budget">
-            ${BUDGETS.map(
-              (b) =>
-                `<button type="button" class="chip ${budget === b.id ? "on" : ""}" role="radio" aria-checked="${budget === b.id}" data-ai-budget="${esc(b.id)}">${esc(b.sub)}</button>`
-            ).join("")}
+        <div class="card">
+          <span class="label-sm">The vibe / your constraints</span>
+          <textarea class="field" id="ai-prompt" placeholder="e.g. I have 6 hours from Bengaluru, on a bike, love waterfalls, hate crowds…">${esc(prompt)}</textarea>
+          <div class="chip-row" style="margin-top:10px">
+            ${AI_CHIPS.map((c) => `<button type="button" class="chip ai-add" data-add="${esc(c.t)}">+ ${esc(c.t)}</button>`).join("")}
           </div>
+          <div style="margin-top:14px">
+            <span class="label-sm">Time budget</span>
+            <div class="chip-row" role="radiogroup" aria-label="ai time budget">
+              ${BUDGETS.map(
+                (b) =>
+                  `<button type="button" class="chip ${budget === b.id ? "on" : ""}" role="radio" aria-checked="${budget === b.id}" data-ai-budget="${esc(b.id)}">${esc(b.sub.split("·")[0].trim())}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <button type="button" class="btn purple" id="btn-cook" style="margin-top:14px" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? "cooking…" : "cook my trip"}</button>
+          <p class="fine" style="margin:10px 0 0">AI suggestions can be confidently wrong — double-check before you go.</p>
         </div>
-        <div class="gap"></div>
-        <button type="button" class="btn" id="btn-cook" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? "cooking…" : "cook my trip"}</button>
-        ${state.aiJustCooked || recent.length ? `<p class="hint" style="margin-top:6px">not quite it? edit your prompt above and cook again</p>` : ""}
+        ${state.aiJustCooked || recent.length ? `<p class="hint" style="margin-top:10px">not quite it? edit your prompt above and cook again</p>` : ""}
         ${state.aiError ? `<div class="banner warn" style="margin-top:8px">${esc(state.aiError)}</div>` : ""}
         ${
           !getKey(getProvider())
@@ -1263,11 +1335,10 @@
       ${
         recent.length
           ? `<div class="block block-lg route-list">
-               <h3 class="section-h" style="font-size:1.45rem">fresh from the kitchen</h3>
+               <h3 class="section-h">fresh from the kitchen</h3>
                ${recent.map(routeCardHtml).join("")}
                <div style="margin-top:14px">
                  <button type="button" class="btn" id="btn-search-more">search for more</button>
-                 <p class="hint" style="margin-top:6px">tweak the prompt above, or cook again with a tighter ask.</p>
                </div>
              </div>`
           : ""
@@ -1280,15 +1351,16 @@
     const routes = ids.map(routeById).filter(Boolean);
     return `
       <div class="hero-block" style="padding-bottom:8px">
-        <div class="brand" style="font-size:2.1rem">saved</div>
-        <span class="hero-tag">works offline</span>
+        <div class="brand">saved</div>
+        <span class="script-pill mint">on this phone</span>
       </div>
       ${
         routes.length
-          ? routes.map(routeCardHtml).join("")
+          ? `<div class="route-list">${routes.map(routeCardHtml).join("")}</div>`
           : `<div class="empty">
-              <div class="display">nothing bookmarked yet</div>
-              <p class="muted">tap save on a trip — it lives on this phone only.</p>
+              <div class="empty-ico" aria-hidden="true">◇</div>
+              <div class="display">empty jar.</div>
+              <p class="muted">tap save on any trip to stash it here.</p>
               <button type="button" class="btn" id="btn-goto-home" style="margin-top:14px">find a trip</button>
             </div>`
       }
@@ -1300,40 +1372,44 @@
     const key = getKey(provider);
     return `
       <div class="hero-block" style="padding-bottom:8px">
-        <div class="brand" style="font-size:2.1rem">settings</div>
+        <div class="brand">settings</div>
       </div>
-      <div class="card accent-edge offset">
-        <strong style="font-size:1.15rem;font-weight:700;letter-spacing:-0.02em">Bring your own key</strong>
-        <p class="fine" style="margin:10px 0">your key never leaves your phone except to talk directly to the provider’s official API. we have no server. we literally cannot see it.</p>
-        <label class="label-sm" for="ai-provider">provider</label>
+      <div class="card offset">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <strong style="font-size:1.05rem;font-weight:800;font-family:IBM Plex Sans,sans-serif">power up with AI</strong>
+          <span class="script-pill pink" style="font-size:15px;padding:2px 10px">optional</span>
+        </div>
+        <p class="fine" style="margin:0 0 12px">App works without AI. A free Gemini key unlocks Ask AI + trip cooking anywhere.</p>
+        <label class="label-sm" for="ai-provider">Provider</label>
         <select class="field" id="ai-provider">
           ${PROVIDERS.map((p) => `<option value="${esc(p.id)}" ${p.id === provider ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
         </select>
-        <label class="label-sm" for="ai-key" style="margin-top:14px">API key</label>
+        <label class="label-sm" for="ai-key" style="margin-top:14px">Your API key</label>
         <input class="field" id="ai-key" type="password" autocomplete="off" placeholder="paste key" value="${esc(key)}" />
         <div class="row" style="margin-top:12px">
           <button type="button" class="btn sm" id="btn-save-key">save key</button>
           <button type="button" class="btn sm secondary" id="btn-test-key">test key</button>
         </div>
         ${state.keyTest ? `<p class="hint" id="key-test-status">${esc(state.keyTest)}</p>` : ""}
-        <h3 class="section-h tight" style="font-size:1.1rem">free Gemini in 4 steps</h3>
+        <h3 class="section-h tight" style="font-size:1.05rem">free Gemini in 4 steps</h3>
         <ol class="steps fine">
           <li>open <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com/app/apikey</a></li>
           <li>sign in with your normal Google account</li>
           <li>tap <strong>Create API key</strong>, then copy the <span class="mono">AIza…</span> code</li>
           <li>paste above, save, hit <strong>test key</strong></li>
         </ol>
+        <p class="fine" style="margin-top:12px">Keys stay on this device. We have no server — we can't see them.</p>
       </div>
       <div class="gap"></div>
       <div class="card panel">
-        <strong style="font-size:1.05rem;font-weight:700">Install as an app</strong>
+        <strong style="font-size:1.05rem;font-weight:800;font-family:IBM Plex Sans,sans-serif">Install as an app</strong>
         <p class="fine" style="margin-top:8px"><strong>Android (Chrome):</strong> menu → Install app / Add to Home screen.</p>
         <p class="fine"><strong>iOS (Safari):</strong> Share → Add to Home Screen.</p>
       </div>
       <div class="gap"></div>
       <div class="card">
-        <strong style="font-size:1.05rem;font-weight:700">Honest fine print</strong>
-        <p class="fine" style="margin-top:8px">no login, no accounts, no ads, no analytics, no tracking, no backend, no cost. all state lives in <span class="mono">localStorage</span> on this device. clearing site data wipes saved trips, keys, and prompts — forever. AI routes are suggestions: verify timings, road status, and water safety yourself. curated Bengaluru pack is hand-checked; still, conditions change.</p>
+        <strong style="font-size:1.05rem;font-weight:800;font-family:IBM Plex Sans,sans-serif">Honest fine print</strong>
+        <p class="fine" style="margin-top:8px">no login, no accounts, no ads, no analytics, no tracking, no backend, no cost. all state lives in <span class="mono">localStorage</span> on this device. clearing site data wipes saved trips, keys, and prompts — forever. AI routes are suggestions: verify timings, road status, and water safety yourself.</p>
       </div>
       <p class="mono muted" style="margin-top:20px;text-align:left">ChaloYaar v${esc(VERSION)}</p>
     `;
@@ -1546,16 +1622,16 @@
     const nav = document.getElementById("nav");
     if (!nav) return;
     const tabs = [
-      { id: "home", label: "Home" },
-      { id: "ai", label: "Ask AI" },
-      { id: "saved", label: "Saved" },
-      { id: "settings", label: "Settings" },
+      { id: "home", label: "let's go", ico: "GO" },
+      { id: "ai", label: "ask ai", ico: "AI" },
+      { id: "saved", label: "saved", ico: "★" },
+      { id: "settings", label: "settings", ico: "⚙" },
     ];
     const active = ["results", "route"].includes(state.screen) ? "home" : state.screen;
     nav.innerHTML = tabs
       .map(
         (t) =>
-          `<button type="button" class="nav-btn ${active === t.id ? "on" : ""}" data-nav="${t.id}"${active === t.id ? ' aria-current="page"' : ""}>${esc(t.label)}</button>`
+          `<button type="button" class="nav-btn ${active === t.id ? "on" : ""}" data-nav="${t.id}"${active === t.id ? ' aria-current="page"' : ""}><span class="nav-ico" aria-hidden="true">${esc(t.ico)}</span>${esc(t.label)}</button>`
       )
       .join("");
     nav.querySelectorAll("[data-nav]").forEach((el) => {
@@ -1592,6 +1668,7 @@
         render();
       });
     }
+    wireLightboxOnce();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     }
