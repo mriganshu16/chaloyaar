@@ -1813,10 +1813,12 @@
           ${PROVIDERS.map((p) => `<option value="${esc(p.id)}" ${p.id === provider ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
         </select>
         <label class="label-sm" for="ai-key" style="margin-top:14px">Your API key</label>
-        <input class="field" id="ai-key" type="password" autocomplete="off" placeholder="paste key" value="${esc(key)}" />
+        <input class="field" id="ai-key" type="password" autocomplete="off" placeholder="${key ? "••••••••  (saved — paste to replace)" : "paste key"}" value="" />
+        ${key ? `<p class="fine" style="margin:6px 0 0">A key is saved on <strong>this device only</strong>. It is never shown again in the page HTML.</p>` : ""}
         <div class="row" style="margin-top:12px">
           <button type="button" class="btn sm" id="btn-save-key">save key</button>
           <button type="button" class="btn sm secondary" id="btn-test-key">test key</button>
+          ${key ? `<button type="button" class="btn sm secondary" id="btn-clear-key">remove</button>` : ""}
         </div>
         ${state.keyTest ? `<p class="hint" id="key-test-status">${esc(state.keyTest)}</p>` : ""}
         <h3 class="section-h tight" style="font-size:1.05rem">free Gemini in 4 steps</h3>
@@ -1826,7 +1828,7 @@
           <li>tap <strong>Create API key</strong>, then copy the <span class="mono">AIza…</span> code</li>
           <li>paste above, save, hit <strong>test key</strong></li>
         </ol>
-        <p class="fine" style="margin-top:12px">Keys stay on this device. We have no server — we can't see them.</p>
+        <p class="fine" style="margin-top:12px">BYOK keys stay in your browser <span class="mono">localStorage</span>. Hinglish uses a separate server key on Netlify that visitors never see.</p>
       </div>
       <div class="gap"></div>
       <div class="card panel">
@@ -2020,9 +2022,25 @@
         save.addEventListener("click", () => {
           const p = getProvider();
           const input = document.getElementById("ai-key");
-          lsSet(LS.keys[p], (input && input.value.trim()) || "");
+          const next = (input && input.value.trim()) || "";
+          if (!next) {
+            toast("paste a key first (empty field won't overwrite)");
+            return;
+          }
+          lsSet(LS.keys[p], next);
+          if (input) input.value = "";
           toast("key saved on this phone only");
           state.keyTest = "";
+          render();
+        });
+      }
+      const clearKey = document.getElementById("btn-clear-key");
+      if (clearKey) {
+        clearKey.addEventListener("click", () => {
+          const p = getProvider();
+          lsSet(LS.keys[p], "");
+          state.keyTest = "";
+          toast("key removed from this phone");
           render();
         });
       }
