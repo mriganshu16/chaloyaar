@@ -20,7 +20,7 @@
       --paper-2: #F3EDE0;
       --surface: #FFFFFF;
       --ink: #0A0A0A;
-      --ink-soft: #4A453C;
+      --ink-soft: #2C2924;
       --line: #0A0A0A;
       --lime: #C8FF00;
       --mint: #80EBCA;
@@ -90,8 +90,8 @@
       padding-top: calc(var(--ticker-h) + var(--safe-t));
       padding-bottom: calc(var(--nav-h) + var(--safe-b) + 12px);
       background-color: var(--paper);
-      background-image: radial-gradient(#0A0A0A 1px, transparent 1px);
-      background-size: 14px 14px;
+      background-image: radial-gradient(rgba(10, 10, 10, 0.12) 1px, transparent 1px);
+      background-size: 16px 16px;
       position: relative;
     }
 
@@ -619,9 +619,23 @@
     .block .section-h:first-child,
     .block-head .section-h { margin-top: 0; }
 
-    .list-block { margin: 0; padding-left: 1.15rem; }
-    .list-block li { margin-bottom: 6px; color: var(--ink-soft); font-size: 14px; }
-    .list-block li strong { color: var(--ink); font-weight: 700; }
+    .block > p,
+    .block .section-h + p {
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.5;
+      margin: 0 0 10px;
+    }
+    .list-block li {
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.45;
+    }
+    .list-block li:last-child { margin-bottom: 0; }
+    .list-block li strong { color: var(--ink); font-weight: 800; }
 
     .banner {
       background: var(--surface);
@@ -698,9 +712,9 @@
       box-shadow: none;
     }
 
-    .muted { color: var(--ink-soft); font-size: 13px; }
-    .hint { font-size: 13px; margin: 0 0 12px; font-weight: 500; color: var(--ink-soft); }
-    .fine { font-size: 13px; line-height: 1.45; color: var(--ink-soft); }
+    .muted { color: var(--ink); font-size: 13px; font-weight: 500; opacity: 0.85; }
+    .hint { font-size: 13px; margin: 0 0 12px; font-weight: 600; color: var(--ink); opacity: 0.88; }
+    .fine { font-size: 14px; line-height: 1.5; color: var(--ink); font-weight: 500; opacity: 0.9; }
     .toast {
       position: fixed;
       left: 50%;

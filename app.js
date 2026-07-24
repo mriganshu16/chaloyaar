@@ -1261,7 +1261,7 @@
           <span class="pill green">${esc(m.label)}</span>
           <h1 class="display" style="font-size:2.1rem;margin-top:8px;text-transform:lowercase;max-width:12ch;line-height:0.95">${esc(route.name)}</h1>
           ${route.ai ? `<span class="badge-ai" style="margin-top:6px;display:inline-block">AI-made — verify timings and road status</span>` : ""}
-          <p style="margin:8px 0 0;color:var(--ink-soft);font-size:0.88rem;line-height:1.35">${esc(route.tagline)}</p>
+          <p style="margin:8px 0 0;color:var(--ink);font-size:0.92rem;line-height:1.4;font-weight:500">${esc(route.tagline)}</p>
           <div class="stat-chips">
             <span class="stat">${esc(m.label)}</span>
             <span class="stat">${esc(String(route.distance_km))} km</span>
