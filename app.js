@@ -818,7 +818,10 @@
           const url =
             `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`;
           const res = await fetch(url, {
-            headers: { Accept: "application/json" },
+            headers: {
+              Accept: "application/json",
+              "User-Agent": "ChaloYaar/1.0 (travel PWA; contact via github.com/mriganshu16/chaloyaar)",
+            },
           });
           const j = await res.json();
           const a = j.address || {};

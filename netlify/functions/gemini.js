@@ -1,5 +1,5 @@
 /**
- * Hosted Gemini proxy for Hinglish.
+ * Hosted Gemini proxy for Hinglish only.
  * Key: Netlify env GEMINI_API_KEY — never shipped to the browser.
  *
  * POST /api/gemini  { "prompt": "...", "purpose": "hinglish" }
@@ -15,10 +15,9 @@ const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:8888",
 ]);
 
-// Best-effort per-instance rate limit (serverless instances don't share memory)
 const hits = new Map();
 const RATE_WINDOW_MS = 60 * 1000;
-const RATE_MAX = 12; // per IP per minute per warm instance
+const RATE_MAX = 10; // per IP per minute per warm instance
 
 function clientIp(event) {
   const xf = event.headers["x-forwarded-for"] || event.headers["X-Forwarded-For"] || "";
@@ -41,13 +40,23 @@ function rateLimit(ip) {
   return bucket.count <= RATE_MAX;
 }
 
-function allowOrigin(event) {
+function resolveAllowedOrigin(event) {
   const origin = event.headers.origin || event.headers.Origin || "";
-  if (!origin) return ""; // same-origin / non-browser
-  if (ALLOWED_ORIGINS.has(origin)) return origin;
-  // Netlify deploy previews for this site
-  if (/^https:\/\/[a-z0-9-]+--chaloyaar\.netlify\.app$/i.test(origin)) return origin;
-  if (/^https:\/\/chaloyaar\.netlify\.app$/i.test(origin)) return origin;
+  if (origin) {
+    if (ALLOWED_ORIGINS.has(origin)) return origin;
+    if (/^https:\/\/[a-z0-9-]+--chaloyaar\.netlify\.app$/i.test(origin)) return origin;
+    if (/^https:\/\/chaloyaar\.netlify\.app$/i.test(origin)) return origin;
+    return null;
+  }
+  // No Origin (curl/scripts): allow only if Referer matches our sites
+  const referer = event.headers.referer || event.headers.Referer || "";
+  try {
+    if (!referer) return null;
+    const refOrigin = new URL(referer).origin;
+    if (ALLOWED_ORIGINS.has(refOrigin)) return refOrigin;
+    if (/^https:\/\/[a-z0-9-]+--chaloyaar\.netlify\.app$/i.test(refOrigin)) return refOrigin;
+    if (/^https:\/\/chaloyaar\.netlify\.app$/i.test(refOrigin)) return refOrigin;
+  } catch (_) {}
   return null;
 }
 
@@ -57,7 +66,8 @@ function cors(status, body, allow) {
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Cache-Control": "no-store",
-    "Vary": "Origin",
+    Vary: "Origin",
+    "X-Content-Type-Options": "nosniff",
   };
   if (allow) headers["Access-Control-Allow-Origin"] = allow;
   return {
@@ -139,18 +149,23 @@ function hinglishPromptOk(prompt) {
     /Rewrite this ChaloYaar trip copy into casual Hinglish/i.test(prompt) &&
     /Source:\s*\{/i.test(prompt) &&
     /"tagline"\s*:/i.test(prompt) &&
-    /"why"\s*:/i.test(prompt)
+    /"why"\s*:/i.test(prompt) &&
+    /"facts"\s*:/i.test(prompt)
   );
 }
 
 exports.handler = async (event) => {
-  const allow = allowOrigin(event);
-  if (allow === null) {
+  const allow = resolveAllowedOrigin(event);
+  if (!allow) {
     return cors(403, { error: "origin not allowed" }, "");
   }
 
-  if (event.httpMethod === "OPTIONS") return cors(204, null, allow || "*");
-  if (event.httpMethod !== "POST") return cors(405, { error: "POST only" }, allow);
+  if (event.httpMethod === "OPTIONS") {
+    return cors(204, null, allow);
+  }
+  if (event.httpMethod !== "POST") {
+    return cors(405, { error: "POST only" }, allow);
+  }
 
   if (!rateLimit(clientIp(event))) {
     return cors(429, { error: "too many requests — slow down" }, allow);
@@ -166,6 +181,14 @@ exports.handler = async (event) => {
     body = JSON.parse(event.body || "{}");
   } catch (_) {
     return cors(400, { error: "invalid JSON body" }, allow);
+  }
+
+  // Reject unexpected fields stuffing
+  if (body && typeof body === "object") {
+    const keys = Object.keys(body);
+    if (keys.some((k) => k !== "prompt" && k !== "purpose")) {
+      return cors(400, { error: "unexpected fields" }, allow);
+    }
   }
 
   const purpose = String(body.purpose || "");
@@ -192,7 +215,8 @@ exports.handler = async (event) => {
     for (const model of models.slice(0, 6)) {
       try {
         const text = await generate(key, model, prompt, purpose);
-        return cors(200, { text, model }, allow);
+        // Do not echo model name (reduces fingerprinting / info leak)
+        return cors(200, { text }, allow);
       } catch (e) {
         const msg = (e && e.message) || String(e);
         if (/limit:\s*0|not found|404|429|RESOURCE_EXHAUSTED/i.test(msg) || e.status === 404 || e.status === 429) {
@@ -205,7 +229,9 @@ exports.handler = async (event) => {
     throw lastErr || new Error("all Gemini models failed");
   } catch (e) {
     const msg = (e && e.message) || "Gemini request failed";
-    const status = /quota|rate|429|RESOURCE_EXHAUSTED/i.test(msg) ? 429 : 502;
-    return cors(status, { error: msg }, allow);
+    // Never leak key or stack
+    const safe = String(msg).replace(/key=[^&\s]+/gi, "key=REDACTED").slice(0, 300);
+    const status = /quota|rate|429|RESOURCE_EXHAUSTED/i.test(safe) ? 429 : 502;
+    return cors(status, { error: safe }, allow);
   }
 };

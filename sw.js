@@ -1,5 +1,5 @@
 /* ChaloYaar service worker — cache-first app shell. Never intercept cross-origin APIs. */
-const CACHE = "chaloyaar-v23";
+const CACHE = "chaloyaar-v24";
 const SHELL = [
   "./",
   "./index.html",
@@ -34,13 +34,20 @@ self.addEventListener("fetch", (event) => {
 
   // Never intercept cross-origin API calls (Gemini, Open-Meteo, Nominatim, etc.)
   if (url.origin !== self.location.origin) {
-    // Stale-while-revalidate for Google Fonts only
     if (
       url.hostname === "fonts.googleapis.com" ||
       url.hostname === "fonts.gstatic.com"
     ) {
       event.respondWith(staleWhileRevalidate(req));
     }
+    return;
+  }
+
+  // Never cache API / functions — always network
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/.netlify/functions/")
+  ) {
     return;
   }
 
@@ -52,8 +59,10 @@ async function cacheFirst(req) {
   if (cached) return cached;
   try {
     const res = await fetch(req);
-    const cache = await caches.open(CACHE);
-    cache.put(req, res.clone());
+    if (res && res.ok && req.method === "GET") {
+      const cache = await caches.open(CACHE);
+      cache.put(req, res.clone());
+    }
     return res;
   } catch (_) {
     if (req.mode === "navigate") {

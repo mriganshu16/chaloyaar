@@ -35,4 +35,13 @@
   for = "/api/*"
   [headers.values]
     Cache-Control = "no-store"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
 
