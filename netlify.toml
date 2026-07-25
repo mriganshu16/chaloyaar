@@ -10,6 +10,19 @@
   status = 200
   force = true
 
+# Deep links: /trip/:id → SPA with ?trip= (also read from path in JS)
+[[redirects]]
+  from = "/trip/:id"
+  to = "/index.html?trip=:id"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/trip/:id/"
+  to = "/index.html?trip=:id"
+  status = 200
+  force = true
+
 [[headers]]
   for = "/*"
   [headers.values]

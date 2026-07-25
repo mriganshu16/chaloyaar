@@ -194,10 +194,29 @@
   // Public site for WhatsApp / share (localhost links aren't clickable for friends)
   const PUBLIC_SHARE_ORIGIN = "https://chaloyaar.nofilterhq.in";
 
+  const START_CITIES = [
+    "Bengaluru",
+    "Pune",
+    "Mumbai",
+    "Hyderabad",
+    "Chennai",
+    "Delhi NCR",
+    "Goa",
+    "Jaipur",
+    "Kochi",
+    "Kolkata",
+    "Ahmedabad",
+    "Chandigarh",
+  ];
+
   function shareOrigin() {
     try {
       const host = (location && location.hostname) || "";
       if (!host || host === "localhost" || host === "127.0.0.1") {
+        return PUBLIC_SHARE_ORIGIN;
+      }
+      // Always share the canonical public domain so deep links resolve for everyone
+      if (host.endsWith("nofilterhq.in") || host.endsWith("netlify.app") || host.endsWith("github.io")) {
         return PUBLIC_SHARE_ORIGIN;
       }
       const base = location.href.split("#")[0].split("?")[0];
@@ -207,10 +226,32 @@
     }
   }
 
+  function appBasePath() {
+    try {
+      let p = location.pathname || "/";
+      p = p.replace(/\/index\.html$/i, "");
+      p = p.replace(/\/trip\/[^/]+\/?$/, "");
+      if (!p || p === "/") return "";
+      return p.replace(/\/$/, "");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function tripPath(id) {
+    const base = appBasePath();
+    return `${base}/trip/${encodeURIComponent(id)}`;
+  }
+
+  function homePath() {
+    const base = appBasePath();
+    return base ? `${base}/` : "/";
+  }
+
   function tripDeepLink(route) {
-    if (!route || !route.id) return shareOrigin() + "/";
-    // query param (not hash) — WhatsApp linkifies these reliably
-    return `${shareOrigin()}/?trip=${encodeURIComponent(route.id)}`;
+    if (!route || !route.id) return `${PUBLIC_SHARE_ORIGIN}/`;
+    // Path-based URL — survives WhatsApp / in-app browsers better than ?query alone
+    return `${PUBLIC_SHARE_ORIGIN}/trip/${encodeURIComponent(route.id)}`;
   }
 
   function shareText(route, modeId) {
@@ -318,6 +359,7 @@
     lang: lsGet(LS.lang, "en") === "hi" ? "hi" : "en",
     langBusy: false,
     langError: "",
+    deepLinkMiss: "",
   };
 
   /* ---------- place photos (Wikipedia / Commons, free, no key) ---------- */
@@ -1517,9 +1559,18 @@
         <div class="card">
           <span class="label-sm" id="loc-label">Starting from</span>
           <div class="stack-tight">
-            <input class="field search-like" id="loc-input" aria-labelledby="loc-label" placeholder="Search city or area" value="${esc(state.loc)}" autocomplete="off" />
+            <input class="field search-like" id="loc-input" list="city-list" aria-labelledby="loc-label" placeholder="Type or pick a city" value="${esc(state.loc)}" autocomplete="off" />
+            <datalist id="city-list">
+              ${START_CITIES.map((c) => `<option value="${esc(c)}"></option>`).join("")}
+            </datalist>
+            <div class="city-chips" role="list" aria-label="Pick a starting city">
+              ${START_CITIES.map((c) => {
+                const on = (state.loc || "").trim().toLowerCase() === c.toLowerCase();
+                return `<button type="button" class="chip ${on ? "on" : ""}" data-city="${esc(c)}" role="listitem">${esc(c)}</button>`;
+              }).join("")}
+            </div>
             <button type="button" class="btn" id="btn-detect">${state.detecting ? "Detecting…" : "Detect my location"}</button>
-            <p class="fine" style="margin:0">Curated routes are for <strong>${esc(CURATED_CITY)}</strong> right now · other cities → <strong>Ask AI</strong> cooks them fresh</p>
+            <p class="fine" style="margin:0">Planning for a friend or a future trip? Pick their city — maps &amp; Ask AI will use it. Curated pack is still <strong>${esc(CURATED_CITY)}</strong> for now.</p>
           </div>
         </div>
       </div>
@@ -1874,7 +1925,21 @@
           state.loc = loc.value;
           lsSet(LS.loc, state.loc);
         });
+        loc.addEventListener("change", () => {
+          state.loc = loc.value;
+          lsSet(LS.loc, state.loc);
+          render();
+        });
       }
+      document.querySelectorAll("[data-city]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const city = el.getAttribute("data-city") || "";
+          state.loc = city;
+          lsSet(LS.loc, city);
+          toast(`Starting from ${city}`);
+          render();
+        });
+      });
       const det = document.getElementById("btn-detect");
       if (det) det.addEventListener("click", () => detectLocation());
       document.querySelectorAll("[data-budget]").forEach((el) => {
@@ -2055,39 +2120,55 @@
     state.routeAsk = "";
     state.routeAskAnswer = "";
     try {
-      const url = new URL(location.href);
-      url.searchParams.set("trip", id);
-      url.hash = "";
-      history.replaceState(null, "", url.pathname + url.search);
+      history.replaceState(null, "", tripPath(id));
     } catch (_) {}
     const r = routeById(id);
     if (r) loadWeather(r);
     render();
   }
 
-  function applyDeepLink() {
+  function parseTripIdFromLocation() {
     let id = "";
     try {
-      const params = new URLSearchParams((location && location.search) || "");
-      id = params.get("trip") || "";
+      const path = (location.pathname || "").replace(/\/index\.html$/i, "");
+      const pathMatch = path.match(/\/trip\/([^/]+)\/?$/);
+      if (pathMatch) id = pathMatch[1];
     } catch (_) {}
+    if (!id) {
+      try {
+        const params = new URLSearchParams((location && location.search) || "");
+        id = params.get("trip") || "";
+      } catch (_) {}
+    }
     if (!id) {
       const h = (typeof location !== "undefined" && location.hash) || "";
       const m = /^#\/?trip\/(.+)$/.exec(h);
-      if (m) {
-        id = m[1];
-        try {
-          id = decodeURIComponent(id);
-        } catch (_) {}
-      }
-    } else {
-      try {
-        id = decodeURIComponent(id);
-      } catch (_) {}
+      if (m) id = m[1];
     }
-    if (!id || !routeById(id)) return false;
+    if (!id) return "";
+    try {
+      return decodeURIComponent(id);
+    } catch (_) {
+      return id;
+    }
+  }
+
+  function applyDeepLink() {
+    const id = parseTripIdFromLocation();
+    if (!id) return false;
+    if (!routeById(id)) {
+      state.deepLinkMiss = id;
+      return false;
+    }
+    state.deepLinkMiss = "";
     state.routeId = id;
     state.screen = "route";
+    // Normalize URL to path form so refresh keeps working
+    try {
+      if (!/\/trip\//.test(location.pathname || "")) {
+        history.replaceState(null, "", tripPath(id));
+      }
+    } catch (_) {}
     return true;
   }
 
@@ -2150,14 +2231,15 @@
       headerHome.addEventListener("click", (e) => {
         e.preventDefault();
         state.screen = "home";
+        state.routeId = null;
         try {
-          history.replaceState(null, "", location.pathname + location.search);
+          history.replaceState(null, "", homePath());
         } catch (_) {}
         render();
       });
     }
     wireLightboxOnce();
-    applyDeepLink();
+    const opened = applyDeepLink();
     window.addEventListener("hashchange", () => {
       if (applyDeepLink()) {
         const r = routeById(state.routeId);
@@ -2165,11 +2247,25 @@
         render();
       }
     });
+    window.addEventListener("popstate", () => {
+      if (applyDeepLink()) {
+        const r = routeById(state.routeId);
+        if (r) loadWeather(r);
+      } else if (!parseTripIdFromLocation()) {
+        // Back to a non-trip URL
+        if (state.screen === "route") state.screen = state.budget ? "results" : "home";
+      }
+      render();
+    });
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     }
     render();
-    if (state.screen === "route" && state.routeId) {
+    if (state.deepLinkMiss) {
+      toast("That shared trip isn’t in this pack (maybe AI-only on another phone)");
+      state.deepLinkMiss = "";
+    }
+    if (opened && state.screen === "route" && state.routeId) {
       const r = routeById(state.routeId);
       if (r) loadWeather(r);
     }
@@ -2191,6 +2287,10 @@
     setTripLang,
     parseLangJson,
     extractJsonBlob,
+    tripDeepLink,
+    applyDeepLink,
+    parseTripIdFromLocation,
+    START_CITIES,
     parseRoutes,
     fillRouteDefaults,
     stripFences,
