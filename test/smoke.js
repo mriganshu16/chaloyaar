@@ -355,6 +355,41 @@ async function main() {
   assert(CY.weatherVerdict({ rainProb: 80, code: 1 }).includes("heavy rain"), "heavy rain verdict");
   assert(CY.weatherVerdict({ rainProb: 10, wind: 5, temp: 28 }).includes("clear enough"), "clear verdict");
 
+  section("location-scoped trip lists");
+  assert(typeof CY.routesNearLoc === "function", "routesNearLoc exported");
+  assert(CY.isCuratedLoc("Bengaluru"), "Bengaluru is curated city");
+  assert(CY.isCuratedLoc("Bangalore"), "Bangalore alias is curated");
+  assert(CY.isCuratedLoc(""), "empty loc defaults to curated pack");
+  assert(!CY.isCuratedLoc("Pune"), "Pune is not curated");
+  assert(CY.locsMatch("Mumbai", "Bombay"), "Mumbai/Bombay aliases match");
+  const nearBlr = CY.routesNearLoc("Bengaluru");
+  assert(
+    nearBlr.some((r) => r.id === "nandi-hills-sunrise"),
+    "Bengaluru list includes curated Nandi"
+  );
+  const nearPune = CY.routesNearLoc("Pune");
+  assert(
+    !nearPune.some((r) => !r.ai && r.id === "nandi-hills-sunrise"),
+    "Pune list excludes curated Bengaluru trips"
+  );
+  assert(
+    !nearPune.some((r) => !r.ai),
+    "Pune list has no curated (non-AI) trips"
+  );
+  CY.state.loc = "Pune";
+  CY.state.budget = "quick";
+  CY.state.mode = "flexible";
+  CY.state.screen = "results";
+  CY.render();
+  const puneResults = viewText();
+  assert(puneResults.includes("near Pune") || puneResults.includes("Pune"), "results header mentions Pune");
+  assert(!puneResults.includes("Nandi Hills"), "Pune quick escape does not list Nandi Hills");
+  assert(puneResults.includes("Find trips near Pune") || puneResults.includes("Search"), "Pune empty state offers search");
+  CY.state.loc = "Bengaluru";
+  CY.state.screen = "results";
+  CY.render();
+  assert(viewText().includes("Nandi"), "Bengaluru quick escape still shows curated trips");
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

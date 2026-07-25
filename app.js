@@ -149,10 +149,77 @@
     return routes.filter((r) => r.budget === budget);
   }
 
+  function normLoc(loc) {
+    return String(loc || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function locAliases(loc) {
+    const s = normLoc(loc);
+    if (!s) return [];
+    if (/bengaluru|bangalore|bengalooru/.test(s)) return ["bengaluru", "bangalore", "bengalooru"];
+    if (/delhi|ncr|gurgaon|gurugram|noida|faridabad/.test(s)) return ["delhi", "delhi ncr", "ncr"];
+    if (/bombay|mumbai/.test(s)) return ["mumbai", "bombay"];
+    if (/madras|chennai/.test(s)) return ["chennai", "madras"];
+    if (/calcutta|kolkata/.test(s)) return ["kolkata", "calcutta"];
+    if (/pondicherry|puducherry/.test(s)) return ["puducherry", "pondicherry"];
+    return [s];
+  }
+
+  function locsMatch(a, b) {
+    const aa = locAliases(a);
+    const bb = locAliases(b);
+    if (!aa.length || !bb.length) return false;
+    return aa.some((x) => bb.some((y) => x === y || x.includes(y) || y.includes(x)));
+  }
+
+  /** Curated pack is Bengaluru-only. Empty loc → show curated (default pack). */
   function isBengaluruLoc(loc) {
-    if (!loc) return true;
-    const s = loc.toLowerCase();
-    return /bengaluru|bangalore|bengalooru/.test(s) || s.trim() === "";
+    if (!loc || !String(loc).trim()) return true;
+    return locsMatch(loc, CURATED_CITY);
+  }
+
+  function isCuratedLoc(loc) {
+    return isBengaluruLoc(loc);
+  }
+
+  function routeCityKey(route) {
+    if (!route) return "";
+    return route.forLoc || route.origin || "";
+  }
+
+  /** Routes that belong near the user's starting city — never mix packs. */
+  function routesNearLoc(loc) {
+    const curated = Array.isArray(window.CHALO_ROUTES) ? window.CHALO_ROUTES.slice() : [];
+    const ai = lsJSON(LS.aiRoutes, []).map((r) => Object.assign({ ai: true }, r));
+    const showCurated = isCuratedLoc(loc);
+    const out = showCurated ? curated.slice() : [];
+    ai.forEach((r) => {
+      const key = routeCityKey(r);
+      if (!key) {
+        // Legacy AI trips without a city tag: only show with curated city
+        if (showCurated) out.push(r);
+        return;
+      }
+      if (locsMatch(key, loc || CURATED_CITY)) out.push(r);
+    });
+    return out;
+  }
+
+  function clearPinnedCoords() {
+    try {
+      localStorage.removeItem(LS.locLat);
+      localStorage.removeItem(LS.locLng);
+    } catch (_) {}
+  }
+
+  function setStartingLoc(city, opts) {
+    const next = String(city == null ? "" : city).trim();
+    state.loc = next;
+    lsSet(LS.loc, next);
+    if (!(opts && opts.keepCoords)) clearPinnedCoords();
   }
 
   function mapsLink(route, modeId) {
@@ -333,7 +400,8 @@
 
   function persistAiRoute(route) {
     const list = lsJSON(LS.aiRoutes, []);
-    list.unshift(Object.assign({}, route, { ai: true }));
+    const forLoc = (route && route.forLoc) || state.loc || CURATED_CITY;
+    list.unshift(Object.assign({}, route, { ai: true, forLoc }));
     while (list.length > 30) list.pop();
     lsSetJSON(LS.aiRoutes, list);
   }
@@ -827,12 +895,10 @@
           const a = j.address || {};
           const city =
             a.city || a.town || a.village || a.suburb || a.state_district || a.state || "near you";
-          state.loc = city;
-          lsSet(LS.loc, city);
+          setStartingLoc(city, { keepCoords: true });
           toast(`pinned: ${city}`);
         } catch (_) {
-          state.loc = `${latitude.toFixed(3)}, ${longitude.toFixed(3)}`;
-          lsSet(LS.loc, state.loc);
+          setStartingLoc(`${latitude.toFixed(3)}, ${longitude.toFixed(3)}`, { keepCoords: true });
           toast("got coords — name the city if you want");
         }
         state.detecting = false;
@@ -986,7 +1052,8 @@
       },
       season: r.season || { best: "", avoid: "" },
       transit: r.transit || "check local buses/trains — verify last services",
-      origin: r.origin || state.loc || "",
+      origin: r.origin || state.loc || CURATED_CITY,
+      forLoc: r.forLoc || state.loc || CURATED_CITY,
       dest: r.dest || r.name || "",
       destq: r.destq || encodeURIComponent(r.dest || r.name || ""),
       dlat: r.dlat != null ? Number(r.dlat) : null,
@@ -1573,7 +1640,7 @@
               }).join("")}
             </div>
             <button type="button" class="btn" id="btn-detect">${state.detecting ? "Detecting…" : "Detect my location"}</button>
-            <p class="fine" style="margin:0">Planning for a friend or a future trip? Pick their city — maps &amp; Ask AI will use it. Curated pack is still <strong>${esc(CURATED_CITY)}</strong> for now.</p>
+            <p class="fine" style="margin:0">Time cards show the <strong>${esc(CURATED_CITY)}</strong> curated pack when you start there. Pick another city and we’ll only show trips cooked for that city (via Search / Ask AI) — not ${esc(CURATED_CITY)} escapes.</p>
           </div>
         </div>
       </div>
@@ -1610,23 +1677,23 @@
   }
 
   function viewResults() {
-    let routes = filterByBudget(allRoutes(), state.budget);
+    const locLabel = (state.loc && state.loc.trim()) || CURATED_CITY;
+    let routes = filterByBudget(routesNearLoc(state.loc), state.budget);
     routes = filterByMode(routes, state.mode);
     const b = BUDGETS.find((x) => x.id === state.budget);
-    const showAiBanner = !isBengaluruLoc(state.loc);
-    const hasSearch = !!(state.loc && state.loc.trim());
+    const otherCity = !isCuratedLoc(state.loc);
     return `
       <div class="block" id="results-top">
         <div class="topbar">
           <button type="button" class="btn sm secondary" id="btn-back-home">Back</button>
         </div>
         <h2 class="display">${esc(b ? b.label : "Trips")}</h2>
-        <p class="hint" style="margin-top:6px">${routes.length} trip${routes.length === 1 ? "" : "s"} ready${hasSearch ? ` · from ${esc(state.loc)}` : ""}</p>
+        <p class="hint" style="margin-top:6px">${routes.length} trip${routes.length === 1 ? "" : "s"} near <strong>${esc(locLabel)}</strong></p>
         ${modeChipsHtml(state.mode)}
       </div>
       ${
-        showAiBanner
-          ? `<div class="block"><div class="banner">Not seeing your city in the curated pack? Open <strong>Ask AI</strong> — paste a free Gemini key in Settings and cook trips for anywhere.</div></div>`
+        otherCity
+          ? `<div class="block"><div class="banner">Starting from <strong>${esc(locLabel)}</strong> — curated pack is ${esc(CURATED_CITY)} only. Tap <strong>Search for more</strong> (or Ask AI) to cook trips around ${esc(locLabel)}.</div></div>`
           : ""
       }
       <div class="block block-lg route-list">
@@ -1634,20 +1701,27 @@
         routes.length
           ? routes.map(routeCardHtml).join("")
           : `<div class="empty">
-              <div class="display">nothing for this combo yet</div>
-              <p class="muted">Try another mode, or let Ask AI draft something.</p>
-              <button type="button" class="btn green" id="btn-goto-ai" style="margin-top:10px">Open Ask AI</button>
+              <div class="display">${otherCity ? `nothing near ${esc(locLabel)} yet` : "nothing for this combo yet"}</div>
+              <p class="muted">${
+                otherCity
+                  ? `We don’t have a hand-curated pack for ${esc(locLabel)} yet. Search cooks a few options for this time window.`
+                  : "Try another mode, or let Ask AI draft something."
+              }</p>
+              <div class="stack-tight" style="margin-top:12px">
+                <button type="button" class="btn green" id="btn-search-more"${state.aiBusy ? " disabled" : ""}>${state.aiBusy ? "Cooking…" : otherCity ? `Find trips near ${esc(locLabel)}` : "Search for more"}</button>
+                <button type="button" class="btn secondary" id="btn-goto-ai">Open Ask AI</button>
+              </div>
             </div>`
       }
       </div>
       ${
-        hasSearch || routes.length
+        routes.length
           ? `<div class="block">
                <div class="stack-tight">
-                 <button type="button" class="btn" id="btn-search-more"${state.aiBusy ? " disabled" : ""}>${state.aiBusy ? "Cooking more…" : "Search for more"}</button>
+                 <button type="button" class="btn" id="btn-search-more"${state.aiBusy ? " disabled" : ""}>${state.aiBusy ? "Cooking more…" : otherCity ? `Search more near ${esc(locLabel)}` : "Search for more"}</button>
                  <button type="button" class="btn secondary" id="btn-edit-feelings">Edit your feelings</button>
                </div>
-               <p class="hint" style="margin-top:8px">Search cooks more trips from your prompt. Edit lets you tweak the vibe first.</p>
+               <p class="hint" style="margin-top:8px">Search cooks more trips from your starting city + time window. Edit lets you tweak the vibe first.</p>
              </div>`
           : ""
       }
@@ -1925,20 +1999,17 @@
       const loc = document.getElementById("loc-input");
       if (loc) {
         loc.addEventListener("input", () => {
-          state.loc = loc.value;
-          lsSet(LS.loc, state.loc);
+          setStartingLoc(loc.value);
         });
         loc.addEventListener("change", () => {
-          state.loc = loc.value;
-          lsSet(LS.loc, state.loc);
+          setStartingLoc(loc.value);
           render();
         });
       }
       document.querySelectorAll("[data-city]").forEach((el) => {
         el.addEventListener("click", () => {
           const city = el.getAttribute("data-city") || "";
-          state.loc = city;
-          lsSet(LS.loc, city);
+          setStartingLoc(city);
           toast(`Starting from ${city}`);
           render();
         });
@@ -1955,8 +2026,16 @@
       const sur = document.getElementById("btn-surprise");
       if (sur) {
         sur.addEventListener("click", () => {
-          const pool = filterByMode(allRoutes(), state.mode);
+          const pool = filterByMode(routesNearLoc(state.loc), state.mode);
           if (!pool.length) {
+            if (!isCuratedLoc(state.loc)) {
+              const city = (state.loc && state.loc.trim()) || "that city";
+              toast(`No trips near ${city} yet — search or Ask AI`);
+              state.budget = state.budget || "half";
+              state.screen = "results";
+              render();
+              return;
+            }
             toast("no routes for this mode yet");
             return;
           }
@@ -2306,6 +2385,11 @@
     isSaved,
     savedIds,
     allRoutes,
+    routesNearLoc,
+    isCuratedLoc,
+    isBengaluruLoc,
+    locsMatch,
+    setStartingLoc,
     routeById,
     modeMeta,
     persistAiRoute,
